@@ -77,6 +77,15 @@ describe('plugin', () => {
     )
     await plugin.stop()
   })
+
+  it('tells other plugins it is running until it stops', async () => {
+    const { app } = fakeApp(true)
+    const plugin = createPlugin(app)
+    plugin.start({}, () => undefined)
+    expect(globalThis.__signalk_collisionAlerts).toEqual({ evaluatesTargets: true })
+    await plugin.stop()
+    expect(globalThis.__signalk_collisionAlerts).toBeUndefined()
+  })
 })
 
 describe('plugin with sensor targets', () => {
