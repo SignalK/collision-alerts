@@ -32,6 +32,14 @@ export const ConfigSchema = Type.Object({
     minimum: 0,
     default: 3
   }),
+  maxAlarms: Type.Integer({
+    title: 'Alarm for at most this many targets at once',
+    description:
+      'Only the most urgent targets alarm: the highest level first, then the soonest closest approach. Others alarm when they become one of the most urgent.',
+    minimum: 1,
+    maximum: 5,
+    default: 3
+  }),
   maxRange: Type.Number({
     title: 'Ignore targets farther than (NM)',
     minimum: 0,
@@ -59,6 +67,7 @@ export const DEFAULTS: Config = {
   preset: 'coastal',
   customZones: PRESETS.coastal,
   slowSpeed: 3,
+  maxAlarms: 3,
   maxRange: 12,
   maxAge: 360,
   interval: 2,

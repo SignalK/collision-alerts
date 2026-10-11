@@ -52,6 +52,7 @@ function evaluate(vessels: Record<string, VesselNode>, targets?: Record<string, 
       zones: PRESETS.coastal,
       slowZones: PRESETS.harbour,
       slowSpeed: 0,
+      maxAlarms: 3,
       maxRange: 12 * 1852,
       maxAge: 360
     },
