@@ -17,6 +17,8 @@ function alert(level: CollisionAlert['level']): CollisionAlert {
       cpa: 100,
       tcpa: 60,
       range: 500,
+      targetCog: null,
+      targetSog: 0,
       cpaPositions: null
     }
   }
