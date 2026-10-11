@@ -78,6 +78,7 @@ export default function (app: ServerAPI): Plugin {
           zones: zonesFor(config),
           slowZones: PRESETS.harbour,
           slowSpeed: config.slowSpeed * KNOT,
+          maxAlarms: config.maxAlarms,
           maxRange: config.maxRange * NM,
           maxAge
         },

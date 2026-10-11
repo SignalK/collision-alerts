@@ -33,6 +33,7 @@ const own = defined(toTrack(vessel(50, 1, 0, 5), NOW, 360))
 const SELF = 'urn:mrn:imo:mmsi:111111111'
 const OTHER = 'urn:mrn:imo:mmsi:222222222'
 const THIRD = 'urn:mrn:imo:mmsi:333333333'
+const FOURTH = 'urn:mrn:imo:mmsi:444444444'
 
 function setup(options: Partial<EvaluatorOptions> = {}) {
   const sink = new RecordingSink()
@@ -41,6 +42,7 @@ function setup(options: Partial<EvaluatorOptions> = {}) {
       zones: PRESETS.coastal,
       slowZones: PRESETS.harbour,
       slowSpeed: 0,
+      maxAlarms: 3,
       maxRange: 12 * 1852,
       maxAge: 360,
       ...options
@@ -164,5 +166,66 @@ describe('Evaluator', () => {
     const ship = vessel(50 + 2 / 60, 1 + 300 / 1852 / 60 / Math.cos((50 * Math.PI) / 180), 180, 10)
     ev.evaluate(slowOwn, { [OTHER]: ship }, SELF, NOW)
     expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('alarms only the most urgent targets and promotes the next when one clears', () => {
+    const { sink, ev } = setup({ maxAlarms: 2 })
+    // Three boats dead ahead, closing at 5 m/s from 0.4, 0.6 and 0.8 NM.
+    const near = vessel(50 + 0.4 / 60, 1, 180, 5)
+    const mid = vessel(50 + 0.6 / 60, 1, 180, 5)
+    const far = vessel(50 + 0.8 / 60, 1, 180, 5)
+    ev.evaluate(own, { [OTHER]: far, [THIRD]: mid, [FOURTH]: near }, SELF, NOW)
+    expect(new Map(sink.calls)).toEqual(
+      new Map([
+        [FOURTH, expect.objectContaining({ level: 'alarm' })],
+        [THIRD, expect.objectContaining({ level: 'alarm' })]
+      ])
+    )
+
+    sink.calls = []
+    ev.evaluate(own, { [OTHER]: far, [THIRD]: mid }, SELF, NOW)
+    expect(sink.calls).toContainEqual([FOURTH, undefined])
+    expect(sink.calls).toContainEqual([OTHER, expect.objectContaining({ level: 'alarm' })])
+  })
+
+  it('lets a higher level displace a lower one at the cap', () => {
+    const { sink, ev } = setup({ maxAlarms: 1 })
+    // Passing 0.4 NM abeam (warn) versus coming straight at us (alarm).
+    const passing = vessel(50 + 0.5 / 60, 1 + 0.4 / 60 / Math.cos((50 * Math.PI) / 180), 180, 5)
+    const headOn = vessel(50 + 1 / 60, 1, 180, 5)
+    ev.evaluate(own, { [OTHER]: passing }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+
+    sink.calls = []
+    ev.evaluate(own, { [OTHER]: passing, [THIRD]: headOn }, SELF, NOW)
+    expect(sink.calls).toContainEqual([THIRD, expect.objectContaining({ level: 'alarm' })])
+    expect(sink.calls).toContainEqual([OTHER, undefined])
+  })
+
+  it('keeps an alarmed target over a slightly more urgent newcomer', () => {
+    const { sink, ev } = setup({ maxAlarms: 1 })
+    const first = vessel(50 + 0.6 / 60, 1, 180, 5)
+    // Closest approach 20 s sooner: not enough to take the slot.
+    const second = vessel(50 + 0.6 / 60 - 200 / 1852 / 60, 1, 180, 5)
+    ev.evaluate(own, { [OTHER]: first }, SELF, NOW)
+    sink.calls = []
+    ev.evaluate(own, { [OTHER]: first, [THIRD]: second }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('ranks a target that has passed below one still approaching', () => {
+    const { sink, ev } = setup({ maxAlarms: 1 })
+    // Head-on from 0.1 NM: closest approach in about 18 s.
+    const passing = vessel(50 + 0.1 / 60, 1, 180, 5)
+    ev.evaluate(own, { [OTHER]: passing }, SELF, NOW)
+    // 20 s later it is 10 m astern, its alarm held just past closest approach.
+    const astern = vessel(50 - 10 / 1852 / 60, 1, 180, 5)
+    const approaching = vessel(50 + 0.6 / 60, 1, 180, 5)
+    sink.calls = []
+    ev.evaluate(own, { [OTHER]: astern, [THIRD]: approaching }, SELF, NOW)
+    expect(sink.calls).toEqual([
+      [OTHER, undefined],
+      [THIRD, expect.objectContaining({ level: 'alarm' })]
+    ])
   })
 })

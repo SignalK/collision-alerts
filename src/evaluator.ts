@@ -1,6 +1,6 @@
 import { computeCpa, type CpaResult, type Track } from './cpa.js'
 import type { AlarmSink, CollisionAlert } from './alarms.js'
-import { assess, type AlertLevel, type Zone } from './zones.js'
+import { assess, SEVERITY, type AlertLevel, type Zone } from './zones.js'
 
 /** The fields of a vessel node in the Signal K full data model that we read. */
 export interface VesselNode {
@@ -34,6 +34,8 @@ export interface EvaluatorOptions {
   slowZones: Zone[]
   /** Speed (m/s) below which `slowZones` apply; 0 turns this off. */
   slowSpeed: number
+  /** Most targets alarmed at once; the most urgent ones win. */
+  maxAlarms: number
   /** Targets farther away than this (metres) are not evaluated. */
   maxRange: number
   /** Data older than this (seconds) is ignored. */
@@ -55,6 +57,18 @@ const STATIONARY_SPEED = 0.1
 // threshold before the normal zones return, so speed noise around the
 // threshold does not swap the zones, and with them the alarm, every update.
 const SLOW_RELEASE_MARGIN = 0.25
+
+// A target already alarmed ranks as if its closest approach came this many
+// seconds sooner, so two targets of similar urgency don't take turns at the
+// last alarm slot, which would re-sound the alarm every few seconds.
+const RAISED_PRIORITY = 60
+
+interface Candidate {
+  targetId: string
+  node: TargetNode
+  level: AlertLevel
+  result: CpaResult
+}
 
 export function toTrack(node: VesselNode | undefined, nowMs: number, maxAge: number): Track | null {
   const nav = node?.navigation
@@ -112,11 +126,16 @@ function contextOf(targetId: string, node: TargetNode | undefined): string {
 /**
  * Evaluates every target against own ship and drives the alarm sink.
  * Holds the per-target alert level so hysteresis survives between ticks.
+ *
+ * Every target keeps its level, but only the `maxAlarms` most urgent are
+ * raised: arriving in a crowded anchorage would otherwise raise one alarm per
+ * moored boat ahead.
  */
 export class Evaluator {
   private readonly levels = new Map<string, AlertLevel>()
   private slow = false
   private slowTargets = new Set<string>()
+  private readonly raised = new Set<string>()
 
   constructor(
     private readonly options: EvaluatorOptions,
@@ -134,9 +153,9 @@ export class Evaluator {
     nowMs: number
   ): Evaluation[] {
     const evaluations: Evaluation[] = []
-    const seen = new Set<string>()
     const ownSlow = this.updateOwnSlow(own)
     const slowTargets = new Set<string>()
+    const candidates: Candidate[] = []
 
     for (const [targetId, node] of Object.entries(vessels)) {
       if (targetId === selfId || targetId === 'self') {
@@ -149,7 +168,6 @@ export class Evaluator {
         evaluations.push({ targetId, context, result: null })
         continue
       }
-      seen.add(targetId)
       evaluations.push({ targetId, context, result })
 
       // A fast target keeps the normal zones even then: a ship bearing down on
@@ -163,18 +181,29 @@ export class Evaluator {
       const zones = ownSlow && targetSlow ? this.options.slowZones : this.options.zones
       const level = assess(zones, result.cpa, result.tcpa, this.levels.get(targetId))
       if (level) {
-        this.levels.set(targetId, level)
-        this.sink.set(targetId, this.alert(targetId, node, level, result))
-      } else {
-        this.release(targetId)
+        candidates.push({ targetId, node, level, result })
       }
     }
 
     this.slowTargets = slowTargets
-    for (const targetId of [...this.levels.keys()]) {
-      if (!seen.has(targetId)) {
-        this.release(targetId)
+    this.levels.clear()
+    for (const c of candidates) {
+      this.levels.set(c.targetId, c.level)
+    }
+    const shown = candidates
+      .sort((a, b) => this.compareUrgency(a, b))
+      .slice(0, this.options.maxAlarms)
+    const shownIds = new Set(shown.map((c) => c.targetId))
+    // Clear displaced alarms first, so no more than maxAlarms are ever raised.
+    for (const targetId of [...this.raised]) {
+      if (!shownIds.has(targetId)) {
+        this.raised.delete(targetId)
+        this.sink.set(targetId, undefined)
       }
+    }
+    for (const c of shown) {
+      this.raised.add(c.targetId)
+      this.sink.set(c.targetId, this.alert(c.targetId, c.node, c.level, c.result))
     }
     return evaluations
   }
@@ -182,6 +211,7 @@ export class Evaluator {
   stop(): void {
     this.levels.clear()
     this.slowTargets.clear()
+    this.raised.clear()
     this.sink.clearAll()
   }
 
@@ -192,10 +222,21 @@ export class Evaluator {
     return this.slow
   }
 
-  private release(targetId: string): void {
-    if (this.levels.delete(targetId)) {
-      this.sink.set(targetId, undefined)
-    }
+  /**
+   * Orders the most urgent first: higher level, then still approaching before
+   * already passed (a level is held briefly after closest approach), then the
+   * sooner closest approach.
+   */
+  private compareUrgency(a: Candidate, b: Candidate): number {
+    return (
+      SEVERITY[b.level] - SEVERITY[a.level] ||
+      Number(a.result.tcpa < 0) - Number(b.result.tcpa < 0) ||
+      this.rankedTcpa(a) - this.rankedTcpa(b)
+    )
+  }
+
+  private rankedTcpa(c: Candidate): number {
+    return c.result.tcpa - (this.raised.has(c.targetId) ? RAISED_PRIORITY : 0)
   }
 
   private alert(

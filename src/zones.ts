@@ -27,7 +27,7 @@ export const PRESETS: Record<PresetName, Zone[]> = {
   ]
 }
 
-const SEVERITY: Record<AlertLevel, number> = {
+export const SEVERITY: Record<AlertLevel, number> = {
   alert: 1,
   warn: 2,
   alarm: 3,
