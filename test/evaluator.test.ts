@@ -109,6 +109,13 @@ describe('Evaluator', () => {
       expect(sink.calls).toHaveLength(0)
     })
 
+    it('warns early when it is on a near collision course that passes just astern', () => {
+      const { sink, ev } = setup()
+      // CPA 26 m astern in 6.1 min: outside the alarm time, inside the warning.
+      ev.evaluate(own, { [OTHER]: crossing(0.98) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
     it('still alarms when it will pass close astern', () => {
       const { sink, ev } = setup()
       // CPA 0.14 NM, inside the 0.25 NM alarm distance, in 5.6 min.

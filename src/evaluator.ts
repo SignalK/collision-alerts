@@ -135,12 +135,13 @@ function passesAstern(own: Track, result: CpaResult, wasAstern: boolean): boolea
   return cosOffBow < (wasAstern ? ASTERN_LEAVE : ASTERN_ENTER)
 }
 
-function innermost(zones: Zone[]): Zone[] {
+/** CPA distance of the most severe zone, metres. */
+function innermostCpa(zones: Zone[]): number {
   const strictest = zones.reduce<Zone | undefined>(
     (best, z) => (best === undefined || SEVERITY[z.level] > SEVERITY[best.level] ? z : best),
     undefined
   )
-  return strictest ? [strictest] : []
+  return strictest?.cpa ?? 0
 }
 
 function contextOf(targetId: string, node: TargetNode | undefined): string {
@@ -206,17 +207,17 @@ export class Evaluator {
       }
       const zones = ownSlow && targetSlow ? this.options.slowZones : this.options.zones
       // A target crossing behind us is no threat unless it comes really close,
-      // so only the innermost zone applies to it.
+      // so it raises nothing while its CPA stays outside the innermost zone's
+      // distance. One that will come that close, such as a ship overtaking
+      // straight up our wake, keeps every zone and so its early warning, and
+      // a level already raised follows the normal hysteresis.
       const astern = own !== null && passesAstern(own, result, this.asternTargets.has(targetId))
       if (astern) {
         asternTargets.add(targetId)
       }
-      const level = assess(
-        astern ? innermost(zones) : zones,
-        result.cpa,
-        result.tcpa,
-        this.levels.get(targetId)
-      )
+      const current = this.levels.get(targetId)
+      const passesWideAstern = astern && current === undefined && result.cpa > innermostCpa(zones)
+      const level = passesWideAstern ? undefined : assess(zones, result.cpa, result.tcpa, current)
       if (level) {
         candidates.push({ targetId, node, level, result })
       }

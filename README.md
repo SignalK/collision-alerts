@@ -24,7 +24,7 @@ While you and another boat are both slower than 3 kn (**Use Harbour limits when 
 
 A boat slower than 0.5 kn counts as stopped: boats at anchor report a speed and course that are mostly noise, so two of them never alarm on each other. Anything actually moving towards you still does.
 
-A boat that will pass behind you, more than about 105° off your bow at its closest point, only raises the alarm level, and only once it comes inside the alarm distance. It does not trigger the earlier warning, because a boat crossing your wake is not on a collision course.
+A boat that will pass behind you, more than about 105° off your bow at its closest point, raises nothing unless it will come inside the alarm distance, because a boat crossing your wake is not on a collision course. One that will come that close warns and alarms as usual.
 
 By default, at most three targets alarm at once (**Alarm for at most this many targets at once**, 1 to 5): the highest level first, then the soonest closest approach. The rest alarm as soon as they become one of the most urgent, so a crowded anchorage doesn't bury you in alarms.
 
