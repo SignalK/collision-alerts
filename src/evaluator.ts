@@ -60,6 +60,12 @@ const STATIONARY_SPEED = 0.26
 // threshold does not swap the zones, and with them the alarm, every update.
 const SLOW_RELEASE_MARGIN = 0.25
 
+// A target passes astern when, at closest approach, it lies more than 105°
+// off own ship's bow (cos 105° = -0.26), and counts as ahead again once
+// within 75°, so a target near abeam does not swap between the two.
+const ASTERN_ENTER = -0.26
+const ASTERN_LEAVE = 0.26
+
 // A target already alarmed ranks as if its closest approach came this many
 // seconds sooner, so two targets of similar urgency don't take turns at the
 // last alarm slot, which would re-sound the alarm every few seconds.
@@ -121,6 +127,23 @@ function isSlow(sog: number, slowSpeed: number, wasSlow: boolean): boolean {
   return slowSpeed > 0 && sog < (wasSlow ? slowSpeed + SLOW_RELEASE_MARGIN : slowSpeed)
 }
 
+function passesAstern(own: Track, result: CpaResult, wasAstern: boolean): boolean {
+  if (own.sog === 0 || result.cpa === 0) {
+    return false
+  }
+  const cosOffBow = result.ahead / result.cpa
+  return cosOffBow < (wasAstern ? ASTERN_LEAVE : ASTERN_ENTER)
+}
+
+/** CPA distance of the most severe zone, metres. */
+function innermostCpa(zones: Zone[]): number {
+  const strictest = zones.reduce<Zone | undefined>(
+    (best, z) => (best === undefined || SEVERITY[z.level] > SEVERITY[best.level] ? z : best),
+    undefined
+  )
+  return strictest?.cpa ?? 0
+}
+
 function contextOf(targetId: string, node: TargetNode | undefined): string {
   return node?.context ?? `vessels.${targetId}`
 }
@@ -137,6 +160,7 @@ export class Evaluator {
   private readonly levels = new Map<string, AlertLevel>()
   private slow = false
   private slowTargets = new Set<string>()
+  private asternTargets = new Set<string>()
   private readonly raised = new Set<string>()
 
   constructor(
@@ -157,6 +181,7 @@ export class Evaluator {
     const evaluations: Evaluation[] = []
     const ownSlow = this.updateOwnSlow(own)
     const slowTargets = new Set<string>()
+    const asternTargets = new Set<string>()
     const candidates: Candidate[] = []
 
     for (const [targetId, node] of Object.entries(vessels)) {
@@ -181,13 +206,25 @@ export class Evaluator {
         slowTargets.add(targetId)
       }
       const zones = ownSlow && targetSlow ? this.options.slowZones : this.options.zones
-      const level = assess(zones, result.cpa, result.tcpa, this.levels.get(targetId))
+      // A target crossing behind us is no threat unless it comes really close,
+      // so it raises nothing while its CPA stays outside the innermost zone's
+      // distance. One that will come that close, such as a ship overtaking
+      // straight up our wake, keeps every zone and so its early warning, and
+      // a level already raised follows the normal hysteresis.
+      const astern = own !== null && passesAstern(own, result, this.asternTargets.has(targetId))
+      if (astern) {
+        asternTargets.add(targetId)
+      }
+      const current = this.levels.get(targetId)
+      const passesWideAstern = astern && current === undefined && result.cpa > innermostCpa(zones)
+      const level = passesWideAstern ? undefined : assess(zones, result.cpa, result.tcpa, current)
       if (level) {
         candidates.push({ targetId, node, level, result })
       }
     }
 
     this.slowTargets = slowTargets
+    this.asternTargets = asternTargets
     this.levels.clear()
     for (const c of candidates) {
       this.levels.set(c.targetId, c.level)
@@ -213,6 +250,7 @@ export class Evaluator {
   stop(): void {
     this.levels.clear()
     this.slowTargets.clear()
+    this.asternTargets.clear()
     this.raised.clear()
     this.sink.clearAll()
   }
