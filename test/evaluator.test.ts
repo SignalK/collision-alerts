@@ -73,6 +73,22 @@ describe('toTrack', () => {
 })
 
 describe('Evaluator', () => {
+  it('does not alarm for two boats at anchor whose AIS speed is noise', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour })
+    const anchored = defined(toTrack(vessel(50, 1, 90, 0.2), NOW, 360))
+    // 40 m north, reporting 0.4 kn straight at us.
+    ev.evaluate(anchored, { [OTHER]: vessel(50 + 40 / 1852 / 60, 1, 180, 0.2) }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+  })
+
+  it('alarms for a boat closing slowly on one at anchor', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour })
+    const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    // 100 m north at 1 kn (0.51 m/s) straight at us: closest approach in about 3 min.
+    ev.evaluate(anchored, { [OTHER]: vessel(50 + 100 / 1852 / 60, 1, 180, 0.51) }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+  })
+
   it('raises an alarm for a closing target and names it', () => {
     const { sink, ev } = setup()
     // 1 NM ahead, coming straight at us at 5 m/s: TCPA ~185 s.
