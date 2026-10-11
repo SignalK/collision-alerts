@@ -28,6 +28,20 @@ describe('computeCpa', () => {
     expect(r.targetAtCpa.longitude).toBeCloseTo(0, 3)
   })
 
+  it('tells a target crossing ahead from one crossing astern', () => {
+    const own = { position: { latitude: 50, longitude: 1 }, cog: 0, sog: 5 }
+    // A target 1 NM west heading east at our speed crosses our track ahead of
+    // us when it starts more than 1 NM north, astern when less.
+    const crossing = (northNm: number) => ({
+      position: { latitude: 50 + northNm / 60, longitude: 1 - 1 / 60 / Math.cos(50 * DEG) },
+      cog: 90 * DEG,
+      sog: 5
+    })
+    expect(computeCpa(own, crossing(1.4)).ahead).toBeCloseTo(0.2 * 1852, -1)
+    expect(computeCpa(own, crossing(0.6)).ahead).toBeCloseTo(-0.2 * 1852, -1)
+    expect(computeCpa({ ...own, sog: 0 }, crossing(0.6)).ahead).toBe(0)
+  })
+
   it('reports a negative TCPA once the target has passed', () => {
     const r = computeCpa(
       { position: { latitude: 0, longitude: 0 }, cog: 0, sog: 0 },

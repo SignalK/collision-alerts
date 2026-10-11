@@ -89,6 +89,34 @@ describe('Evaluator', () => {
     expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
   })
 
+  describe('a target crossing our track', () => {
+    // 1 NM west heading east at our speed (5 m/s); it crosses ahead of us
+    // when it starts more than 1 NM north, astern when less.
+    const crossing = (northNm: number) =>
+      vessel(50 + northNm / 60, 1 - 1 / 60 / Math.cos((50 * Math.PI) / 180), 90, 5)
+
+    it('warns when it will pass ahead within the warning distance', () => {
+      const { sink, ev } = setup()
+      // CPA 0.28 NM, 0.2 NM ahead of us, in 7.4 min.
+      ev.evaluate(own, { [OTHER]: crossing(1.4) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
+    it('stays quiet when it will pass astern at the same distance', () => {
+      const { sink, ev } = setup()
+      // CPA 0.28 NM, 0.2 NM astern of us, in 5 min.
+      ev.evaluate(own, { [OTHER]: crossing(0.6) }, SELF, NOW)
+      expect(sink.calls).toHaveLength(0)
+    })
+
+    it('still alarms when it will pass close astern', () => {
+      const { sink, ev } = setup()
+      // CPA 0.14 NM, inside the 0.25 NM alarm distance, in 5.6 min.
+      ev.evaluate(own, { [OTHER]: crossing(0.8) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+  })
+
   it('raises an alarm for a closing target and names it', () => {
     const { sink, ev } = setup()
     // 1 NM ahead, coming straight at us at 5 m/s: TCPA ~185 s.
