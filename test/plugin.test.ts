@@ -46,7 +46,10 @@ function fakeApp(managed: boolean) {
 
 describe('plugin', () => {
   beforeEach(() => vi.useFakeTimers())
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+    globalThis.__signalk_collisionAlerts = undefined
+  })
 
   it('starts with an empty config and raises through the Notifications API', async () => {
     const { app, notifications, handleMessage } = fakeApp(true)
@@ -76,6 +79,15 @@ describe('plugin', () => {
       `notifications.navigation.closestApproach.${OTHER}`
     )
     await plugin.stop()
+  })
+
+  it('tells other plugins it is running until it stops', async () => {
+    const { app } = fakeApp(true)
+    const plugin = createPlugin(app)
+    plugin.start({}, () => undefined)
+    expect(globalThis.__signalk_collisionAlerts).toEqual({ evaluatesTargets: true })
+    await plugin.stop()
+    expect(globalThis.__signalk_collisionAlerts).toBeUndefined()
   })
 })
 

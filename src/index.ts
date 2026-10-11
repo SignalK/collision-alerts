@@ -9,6 +9,13 @@ const PLUGIN_ID = 'signalk-collision-alerts'
 const NM = 1852
 const KNOT = 1852 / 3600
 
+declare global {
+  // Sensor plugins that raise collision alarms of their own (mayara for radar
+  // targets) stand down while this is set, so a target alarms once. A global,
+  // since each plugin gets its own shallow copy of `app`.
+  var __signalk_collisionAlerts: { evaluatesTargets: true } | undefined
+}
+
 function zonesFor(config: Config): Zone[] {
   return config.preset === 'custom' ? config.customZones : PRESETS[config.preset]
 }
@@ -102,10 +109,12 @@ export default function (app: ServerAPI): Plugin {
           app.error(`Collision evaluation failed: ${String(err)}`)
         }
       }, config.interval * 1000)
+      globalThis.__signalk_collisionAlerts = { evaluatesTargets: true }
       app.setPluginStatus('Watching AIS, radar and other targets')
     },
 
     stop() {
+      globalThis.__signalk_collisionAlerts = undefined
       clearInterval(timer)
       timer = undefined
       evaluator?.stop()
