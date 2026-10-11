@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AlarmSink, CollisionAlert } from '../src/alarms.js'
-import { Evaluator, toTrack, type VesselNode } from '../src/evaluator.js'
+import { Evaluator, toTrack, type EvaluatorOptions, type VesselNode } from '../src/evaluator.js'
 import { PRESETS } from '../src/zones.js'
 import { defined } from './helpers.js'
 
@@ -34,9 +34,19 @@ const SELF = 'urn:mrn:imo:mmsi:111111111'
 const OTHER = 'urn:mrn:imo:mmsi:222222222'
 const THIRD = 'urn:mrn:imo:mmsi:333333333'
 
-function setup() {
+function setup(options: Partial<EvaluatorOptions> = {}) {
   const sink = new RecordingSink()
-  const ev = new Evaluator({ zones: PRESETS.coastal, maxRange: 12 * 1852, maxAge: 360 }, sink)
+  const ev = new Evaluator(
+    {
+      zones: PRESETS.coastal,
+      slowZones: PRESETS.harbour,
+      slowSpeed: 0,
+      maxRange: 12 * 1852,
+      maxAge: 360,
+      ...options
+    },
+    sink
+  )
   return { sink, ev }
 }
 
@@ -125,5 +135,34 @@ describe('Evaluator', () => {
     const { sink, ev } = setup()
     ev.stop()
     expect(sink.cleared).toBe(true)
+  })
+
+  it('uses the slow zones while own ship is slow, with a margin before leaving them', () => {
+    // A boat at anchor 0.2 NM ahead, 150 m to starboard of our track: inside
+    // the Coastal limits, outside the Harbour ones.
+    const target = vessel(50 + 0.2 / 60, 1 + 150 / 1852 / 60 / Math.cos((50 * Math.PI) / 180), 0, 0)
+    const at = (sog: number) => defined(toTrack(vessel(50, 1, 0, sog), NOW, 360))
+
+    const normal = setup()
+    normal.ev.evaluate(at(1), { [OTHER]: target }, SELF, NOW)
+    expect(normal.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    ev.evaluate(at(1), { [OTHER]: target }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+    // Just above the threshold the slow zones still hold.
+    ev.evaluate(at(1.6), { [OTHER]: target }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+    ev.evaluate(at(2), { [OTHER]: target }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('keeps the normal zones for a fast target while own ship is slow', () => {
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    const slowOwn = defined(toTrack(vessel(50, 1, 0, 1), NOW, 360))
+    // A ship 2 NM ahead at 10 m/s, passing 300 m off: a Coastal alarm, no Harbour one.
+    const ship = vessel(50 + 2 / 60, 1 + 300 / 1852 / 60 / Math.cos((50 * Math.PI) / 180), 180, 10)
+    ev.evaluate(slowOwn, { [OTHER]: ship }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
   })
 })

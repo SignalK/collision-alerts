@@ -7,6 +7,7 @@ import { targetNodes, type SensorTargetNode } from './targets.js'
 
 const PLUGIN_ID = 'signalk-collision-alerts'
 const NM = 1852
+const KNOT = 1852 / 3600
 
 function zonesFor(config: Config): Zone[] {
   return config.preset === 'custom' ? config.customZones : PRESETS[config.preset]
@@ -66,7 +67,13 @@ export default function (app: ServerAPI): Plugin {
       const config: Config = { ...DEFAULTS, ...(partial as Partial<Config>) }
       const maxAge = config.maxAge
       const activeEvaluator = new Evaluator(
-        { zones: zonesFor(config), maxRange: config.maxRange * NM, maxAge },
+        {
+          zones: zonesFor(config),
+          slowZones: PRESETS.harbour,
+          slowSpeed: config.slowSpeed * KNOT,
+          maxRange: config.maxRange * NM,
+          maxAge
+        },
         createSink(app)
       )
       evaluator = activeEvaluator

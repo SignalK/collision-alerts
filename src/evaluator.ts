@@ -30,6 +30,10 @@ export interface TargetNode extends VesselNode {
 
 export interface EvaluatorOptions {
   zones: Zone[]
+  /** Zones used instead of `zones` while own ship and the target are both slower than `slowSpeed`. */
+  slowZones: Zone[]
+  /** Speed (m/s) below which `slowZones` apply; 0 turns this off. */
+  slowSpeed: number
   /** Targets farther away than this (metres) are not evaluated. */
   maxRange: number
   /** Data older than this (seconds) is ignored. */
@@ -46,6 +50,11 @@ export interface Evaluation {
 // Below this speed COG is noise (and AIS often reports 360° = unavailable),
 // so the vessel is treated as stationary.
 const STATIONARY_SPEED = 0.1
+
+// A boat's speed must rise this far (m/s, about 0.5 kn) above the slow
+// threshold before the normal zones return, so speed noise around the
+// threshold does not swap the zones, and with them the alarm, every update.
+const SLOW_RELEASE_MARGIN = 0.25
 
 export function toTrack(node: VesselNode | undefined, nowMs: number, maxAge: number): Track | null {
   const nav = node?.navigation
@@ -92,6 +101,10 @@ export function formatMessage(name: string, result: CpaResult): string {
   return `Collision risk: ${name}, CPA ${nm} NM in ${minutes} min`
 }
 
+function isSlow(sog: number, slowSpeed: number, wasSlow: boolean): boolean {
+  return slowSpeed > 0 && sog < (wasSlow ? slowSpeed + SLOW_RELEASE_MARGIN : slowSpeed)
+}
+
 function contextOf(targetId: string, node: TargetNode | undefined): string {
   return node?.context ?? `vessels.${targetId}`
 }
@@ -102,6 +115,8 @@ function contextOf(targetId: string, node: TargetNode | undefined): string {
  */
 export class Evaluator {
   private readonly levels = new Map<string, AlertLevel>()
+  private slow = false
+  private slowTargets = new Set<string>()
 
   constructor(
     private readonly options: EvaluatorOptions,
@@ -120,6 +135,8 @@ export class Evaluator {
   ): Evaluation[] {
     const evaluations: Evaluation[] = []
     const seen = new Set<string>()
+    const ownSlow = this.updateOwnSlow(own)
+    const slowTargets = new Set<string>()
 
     for (const [targetId, node] of Object.entries(vessels)) {
       if (targetId === selfId || targetId === 'self') {
@@ -135,7 +152,16 @@ export class Evaluator {
       seen.add(targetId)
       evaluations.push({ targetId, context, result })
 
-      const level = assess(this.options.zones, result.cpa, result.tcpa, this.levels.get(targetId))
+      // A fast target keeps the normal zones even then: a ship bearing down on
+      // a yacht ghosting along in light air needs the early warning.
+      const targetSlow =
+        target !== null &&
+        isSlow(target.sog, this.options.slowSpeed, this.slowTargets.has(targetId))
+      if (targetSlow) {
+        slowTargets.add(targetId)
+      }
+      const zones = ownSlow && targetSlow ? this.options.slowZones : this.options.zones
+      const level = assess(zones, result.cpa, result.tcpa, this.levels.get(targetId))
       if (level) {
         this.levels.set(targetId, level)
         this.sink.set(targetId, this.alert(targetId, node, level, result))
@@ -144,6 +170,7 @@ export class Evaluator {
       }
     }
 
+    this.slowTargets = slowTargets
     for (const targetId of [...this.levels.keys()]) {
       if (!seen.has(targetId)) {
         this.release(targetId)
@@ -154,7 +181,15 @@ export class Evaluator {
 
   stop(): void {
     this.levels.clear()
+    this.slowTargets.clear()
     this.sink.clearAll()
+  }
+
+  private updateOwnSlow(own: Track | null): boolean {
+    if (own) {
+      this.slow = isSlow(own.sog, this.options.slowSpeed, this.slow)
+    }
+    return this.slow
   }
 
   private release(targetId: string): void {

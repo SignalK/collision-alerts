@@ -25,6 +25,13 @@ export const ConfigSchema = Type.Object({
     title: 'Custom zones (used when sensitivity is Custom)',
     default: PRESETS.coastal
   }),
+  slowSpeed: Type.Number({
+    title: 'Use Harbour limits when both boats are slower than (kn)',
+    description:
+      'While you motor slowly through a harbour or anchorage, boats at anchor ahead would otherwise all fall inside the Coastal or Offshore limits. Faster boats keep the normal limits. 0 turns this off.',
+    minimum: 0,
+    default: 3
+  }),
   maxRange: Type.Number({
     title: 'Ignore targets farther than (NM)',
     minimum: 0,
@@ -51,6 +58,7 @@ export type Config = Static<typeof ConfigSchema>
 export const DEFAULTS: Config = {
   preset: 'coastal',
   customZones: PRESETS.coastal,
+  slowSpeed: 3,
   maxRange: 12,
   maxAge: 360,
   interval: 2,
