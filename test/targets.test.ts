@@ -48,7 +48,13 @@ function evaluate(vessels: Record<string, VesselNode>, targets?: Record<string, 
     clearAll: () => undefined
   }
   const evaluations = new Evaluator(
-    { zones: PRESETS.coastal, maxRange: 12 * 1852, maxAge: 360 },
+    {
+      zones: PRESETS.coastal,
+      slowZones: PRESETS.harbour,
+      slowSpeed: 0,
+      maxRange: 12 * 1852,
+      maxAge: 360
+    },
     sink
   ).evaluate(own, targetNodes(vessels, targets, NOW), 'self', NOW)
   return { raised, evaluations }
