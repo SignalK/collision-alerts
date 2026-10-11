@@ -76,6 +76,7 @@ interface Candidate {
   node: TargetNode
   level: AlertLevel
   result: CpaResult
+  target: Track
 }
 
 export function toTrack(node: VesselNode | undefined, nowMs: number, maxAge: number): Track | null {
@@ -191,7 +192,7 @@ export class Evaluator {
       const target = own ? toTrack(node, nowMs, this.options.maxAge) : null
       const result = own && target ? computeCpa(own, target) : null
       const context = contextOf(targetId, node)
-      if (!result || result.range > this.options.maxRange) {
+      if (!target || !result || result.range > this.options.maxRange) {
         evaluations.push({ targetId, context, result: null })
         continue
       }
@@ -199,9 +200,7 @@ export class Evaluator {
 
       // A fast target keeps the normal zones even then: a ship bearing down on
       // a yacht ghosting along in light air needs the early warning.
-      const targetSlow =
-        target !== null &&
-        isSlow(target.sog, this.options.slowSpeed, this.slowTargets.has(targetId))
+      const targetSlow = isSlow(target.sog, this.options.slowSpeed, this.slowTargets.has(targetId))
       if (targetSlow) {
         slowTargets.add(targetId)
       }
@@ -219,7 +218,7 @@ export class Evaluator {
       const passesWideAstern = astern && current === undefined && result.cpa > innermostCpa(zones)
       const level = passesWideAstern ? undefined : assess(zones, result.cpa, result.tcpa, current)
       if (level) {
-        candidates.push({ targetId, node, level, result })
+        candidates.push({ targetId, node, level, result, target })
       }
     }
 
@@ -242,7 +241,7 @@ export class Evaluator {
     }
     for (const c of shown) {
       this.raised.add(c.targetId)
-      this.sink.set(c.targetId, this.alert(c.targetId, c.node, c.level, c.result))
+      this.sink.set(c.targetId, this.alert(c.targetId, c.node, c.level, c.result, c.target))
     }
     return evaluations
   }
@@ -283,7 +282,8 @@ export class Evaluator {
     targetId: string,
     node: TargetNode | undefined,
     level: AlertLevel,
-    result: CpaResult
+    result: CpaResult,
+    target: Track
   ): CollisionAlert {
     return {
       level,
@@ -295,6 +295,9 @@ export class Evaluator {
         cpa: result.cpa,
         tcpa: result.tcpa,
         range: result.range,
+        // A stopped target has no course; its COG is noise.
+        targetCog: target.sog > 0 ? target.cog : null,
+        targetSog: target.sog,
         cpaPositions: { self: result.ownAtCpa, target: result.targetAtCpa }
       }
     }

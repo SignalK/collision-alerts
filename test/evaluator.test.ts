@@ -135,6 +135,19 @@ describe('Evaluator', () => {
     expect(alert?.data).toMatchObject({ targetRef: `vessels.${OTHER}`, source: 'ais' })
   })
 
+  it("carries the target's course and speed in the alarm", () => {
+    const { sink, ev } = setup()
+    ev.evaluate(own, { [OTHER]: vessel(50 + 1 / 60, 1, 180, 5) }, SELF, NOW)
+    expect(sink.calls[0][1]?.data).toMatchObject({ targetCog: Math.PI, targetSog: 5 })
+  })
+
+  it('gives a stopped target no course in the alarm', () => {
+    const { sink, ev } = setup()
+    // We steam at a boat lying still 0.1 NM ahead.
+    ev.evaluate(own, { [OTHER]: vessel(50 + 0.1 / 60, 1, 270, 0.05) }, SELF, NOW)
+    expect(sink.calls[0][1]?.data).toMatchObject({ targetCog: null, targetSog: 0 })
+  })
+
   it('raises one alarm per closing target and clears each independently', () => {
     const { sink, ev } = setup()
     // One dead ahead, one on the starboard bow, both closing.

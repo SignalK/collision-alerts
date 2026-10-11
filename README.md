@@ -17,7 +17,7 @@ If you used the CPA calculation in **SK Derived Data**, turn it off there so you
 
 ## What it publishes
 
-- `notifications.navigation.closestApproach.<target id>` on own vessel, one alarm per target, through the server's Notifications API so acknowledge and silence work from any app. The alarm's `data` carries `targetRef` (the target's Signal K context, e.g. `vessels.urn:mrn:imo:mmsi:244123456`), `source`, `cpa` (m), `tcpa` (s), `range` (m) and `cpaPositions`.
+- `notifications.navigation.closestApproach.<target id>` on own vessel, one alarm per target, through the server's Notifications API so acknowledge and silence work from any app. The alarm's `data` carries `targetRef` (the target's Signal K context, e.g. `vessels.urn:mrn:imo:mmsi:244123456`), `source`, `cpa` (m), `tcpa` (s), `range` (m), the target's `targetCog` (rad, `null` when it is stopped) and `targetSog` (m/s), and `cpaPositions`.
 - `vessels.<target id>.navigation.closestApproach` `{distance, timeTo}` for each target in range (can be turned off).
 
 While you and another boat are both slower than 3 kn (**Use Harbour limits when both boats are slower than**), that boat is judged by the Harbour limits, so the boats at anchor you motor past on arrival don't alarm. A faster boat keeps your chosen limits. Set it to 0 to turn this off.

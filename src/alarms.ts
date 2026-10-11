@@ -20,6 +20,10 @@ export interface CollisionAlertData {
   cpa: number
   tcpa: number
   range: number
+  /** Target's course over ground, radians true; null when it is stopped. */
+  targetCog: number | null
+  /** Target's speed over ground, m/s. */
+  targetSog: number
   cpaPositions: Value
   [key: string]: Value
 }
