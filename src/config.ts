@@ -2,29 +2,25 @@ import { Type, type Static } from 'typebox'
 import { PRESETS } from './zones.js'
 
 const ZoneSchema = Type.Object({
-  level: Type.Union(
-    [Type.Literal('alert'), Type.Literal('warn'), Type.Literal('alarm'), Type.Literal('emergency')],
-    { title: 'Level', default: 'warn' }
-  ),
+  level: Type.Enum(['alert', 'warn', 'alarm', 'emergency'], {
+    type: 'string',
+    title: 'Level',
+    default: 'warn'
+  }),
   cpa: Type.Number({ title: 'CPA at most (m)', minimum: 0, default: 926 }),
   tcpa: Type.Number({ title: 'Within (s)', minimum: 0, default: 720 })
 })
 
 export const ConfigSchema = Type.Object({
-  preset: Type.Union(
-    [
-      Type.Literal('harbour'),
-      Type.Literal('coastal'),
-      Type.Literal('offshore'),
-      Type.Literal('custom')
-    ],
-    {
-      title: 'Alert sensitivity',
-      description:
-        'Harbour: warn at 100 m / 5 min, alarm at 50 m / 2 min. Coastal: warn at 0.5 NM / 12 min, alarm at 0.25 NM / 6 min. Offshore: warn at 1 NM / 20 min, alarm at 0.5 NM / 10 min.',
-      default: 'coastal'
-    }
-  ),
+  // A plain string enum, not a union of literals: the admin UI's form renders
+  // `enum` as a dropdown but shows no control for `anyOf` of `const`s.
+  preset: Type.Enum(['harbour', 'coastal', 'offshore', 'custom'], {
+    type: 'string',
+    title: 'Alert sensitivity',
+    description:
+      'Harbour: warn at 100 m / 5 min, alarm at 50 m / 2 min. Coastal: warn at 0.5 NM / 12 min, alarm at 0.25 NM / 6 min. Offshore: warn at 1 NM / 20 min, alarm at 0.5 NM / 10 min.',
+    default: 'coastal'
+  }),
   customZones: Type.Array(ZoneSchema, {
     title: 'Custom zones (used when sensitivity is Custom)',
     default: PRESETS.coastal
