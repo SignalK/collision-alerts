@@ -46,7 +46,10 @@ function fakeApp(managed: boolean) {
 
 describe('plugin', () => {
   beforeEach(() => vi.useFakeTimers())
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+    globalThis.__signalk_collisionAlerts = undefined
+  })
 
   it('starts with an empty config and raises through the Notifications API', async () => {
     const { app, notifications, handleMessage } = fakeApp(true)
