@@ -26,7 +26,10 @@
   ],
   "signalk": {
     "displayName": "Collision Alerts",
-    "appIcon": "./icon.svg"
+    "appIcon": "./icon.svg",
+    "recommends": [
+      "signalk-target-fusion"
+    ]
   },
   "files": [
     "plugin/**/*",
