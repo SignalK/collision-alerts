@@ -49,9 +49,11 @@ export interface Evaluation {
   result: CpaResult | null
 }
 
-// Below this speed COG is noise (and AIS often reports 360° = unavailable),
-// so the vessel is treated as stationary.
-const STATIONARY_SPEED = 0.1
+// Below this speed (m/s, about 0.5 kn) a vessel is treated as stationary.
+// Boats at anchor report up to 0.4 kn with COG swinging through 200° while
+// their position stays within a few metres; taken at face value, that noise
+// reads as two moored neighbours closing on each other.
+const STATIONARY_SPEED = 0.26
 
 // A boat's speed must rise this far (m/s, about 0.5 kn) above the slow
 // threshold before the normal zones return, so speed noise around the
