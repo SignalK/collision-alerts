@@ -1,5 +1,6 @@
 import { computeCpa, type CpaResult, type Track } from './cpa.js'
 import type { AlarmSink, CollisionAlert } from './alarms.js'
+import { DriftDetector } from './drift.js'
 import { assess, SEVERITY, type AlertLevel, type Zone } from './zones.js'
 
 /** The fields of a vessel node in the Signal K full data model that we read. */
@@ -106,6 +107,11 @@ export function toTrack(node: VesselNode | undefined, nowMs: number, maxAge: num
   return { position, sog, cog }
 }
 
+/** When the vessel's position was reported, ms since the epoch; NaN when unknown. */
+export function positionTime(node: VesselNode | undefined): number {
+  return Date.parse(node?.navigation?.position?.timestamp ?? '')
+}
+
 function isStale(timestamp: string | undefined, nowMs: number, maxAge: number): boolean {
   if (!timestamp) {
     return true
@@ -163,6 +169,7 @@ export class Evaluator {
   private slowTargets = new Set<string>()
   private asternTargets = new Set<string>()
   private readonly raised = new Set<string>()
+  private readonly drift = new DriftDetector()
 
   constructor(
     private readonly options: EvaluatorOptions,
@@ -184,12 +191,15 @@ export class Evaluator {
     const slowTargets = new Set<string>()
     const asternTargets = new Set<string>()
     const candidates: Candidate[] = []
+    const seen = new Set<string>()
 
     for (const [targetId, node] of Object.entries(vessels)) {
       if (targetId === selfId || targetId === 'self') {
         continue
       }
-      const target = own ? toTrack(node, nowMs, this.options.maxAge) : null
+      seen.add(targetId)
+      const reported = own ? toTrack(node, nowMs, this.options.maxAge) : null
+      const target = reported && this.drift.apply(targetId, reported, positionTime(node))
       const result = own && target ? computeCpa(own, target) : null
       const context = contextOf(targetId, node)
       if (!target || !result || result.range > this.options.maxRange) {
@@ -224,6 +234,7 @@ export class Evaluator {
 
     this.slowTargets = slowTargets
     this.asternTargets = asternTargets
+    this.drift.retain(seen)
     this.levels.clear()
     for (const c of candidates) {
       this.levels.set(c.targetId, c.level)
@@ -251,6 +262,7 @@ export class Evaluator {
     this.slowTargets.clear()
     this.asternTargets.clear()
     this.raised.clear()
+    this.drift.clear()
     this.sink.clearAll()
   }
 

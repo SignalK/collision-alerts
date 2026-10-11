@@ -72,6 +72,28 @@ describe('toTrack', () => {
   })
 })
 
+describe('a boat dragging its anchor', () => {
+  it('alarms although it reports being stopped', () => {
+    const { sink, ev } = setup()
+    const still = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    // 150 m north, reporting 0.05 m/s with a random course, drifting south at 0.2 m/s.
+    for (let minute = 0; minute <= 6; minute++) {
+      const time = NOW - (6 - minute) * 60_000
+      const north = 150 - 0.2 * 60 * minute
+      const node = vessel(50 + north / 111_195, 1, 123, 0.05)
+      const nav = defined(node.navigation)
+      for (const field of [nav.position, nav.courseOverGroundTrue, nav.speedOverGround]) {
+        defined(field).timestamp = new Date(time).toISOString()
+      }
+      ev.evaluate(still, { [OTHER]: node }, SELF, time)
+      if (minute === 0) {
+        expect(sink.calls).toEqual([])
+      }
+    }
+    expect(sink.calls.at(-1)?.[1]?.level).toBe('warn')
+  })
+})
+
 describe('Evaluator', () => {
   it('does not alarm for two boats at anchor whose AIS speed is noise', () => {
     const { sink, ev } = setup({ zones: PRESETS.harbour })
