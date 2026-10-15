@@ -226,14 +226,19 @@ describe('Evaluator', () => {
   })
 
   it('uses the slow zones while own ship is slow, with a margin before leaving them', () => {
-    // A boat at anchor 0.2 NM ahead, 150 m to starboard of our track: inside
-    // the Coastal limits, outside the Harbour ones.
-    const target = vessel(50 + 0.2 / 60, 1 + 150 / 1852 / 60 / Math.cos((50 * Math.PI) / 180), 0, 0)
+    // A boat 0.2 NM ahead, 150 m to starboard of our track, coming our way at
+    // 0.6 m/s: inside the Coastal limits, outside the Harbour ones.
+    const target = vessel(
+      50 + 0.2 / 60,
+      1 + 150 / 1852 / 60 / Math.cos((50 * Math.PI) / 180),
+      180,
+      0.6
+    )
     const at = (sog: number) => defined(toTrack(vessel(50, 1, 0, sog), NOW, 360))
 
     const normal = setup()
     normal.ev.evaluate(at(1), { [OTHER]: target }, SELF, NOW)
-    expect(normal.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    expect(normal.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
 
     const { sink, ev } = setup({ slowSpeed: 1.5 })
     ev.evaluate(at(1), { [OTHER]: target }, SELF, NOW)
@@ -243,6 +248,34 @@ describe('Evaluator', () => {
     expect(sink.calls).toHaveLength(0)
     ev.evaluate(at(2), { [OTHER]: target }, SELF, NOW)
     expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  describe('a boat at anchor we pass under way', () => {
+    const anchoredAt = (northNm: number, eastM: number, sog = 0) =>
+      vessel(50 + northNm / 60, 1 + eastM / 1852 / 60 / Math.cos((50 * Math.PI) / 180), 309, sog)
+
+    it('is judged by the Harbour limits', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 0.2 NM ahead, 150 m off our track: a Coastal alarm, nothing in Harbour.
+      ev.evaluate(own, { [OTHER]: anchoredAt(0.2, 150) }, SELF, NOW)
+      expect(sink.calls).toEqual([])
+      // Dead ahead it still alarms.
+      ev.evaluate(own, { [OTHER]: anchoredAt(0.2, 0) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('keeps the normal limits when Harbour limits are turned off', () => {
+      const { sink, ev } = setup()
+      ev.evaluate(own, { [OTHER]: anchoredAt(0.2, 150) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('stays stopped while its reported speed hovers near the threshold', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      ev.evaluate(own, { [OTHER]: anchoredAt(0.2, 150) }, SELF, NOW)
+      ev.evaluate(own, { [OTHER]: anchoredAt(0.2, 150, 0.3) }, SELF, NOW)
+      expect(sink.calls).toEqual([])
+    })
   })
 
   it('keeps the normal zones for a fast target while own ship is slow', () => {

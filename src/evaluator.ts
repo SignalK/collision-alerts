@@ -56,6 +56,11 @@ export interface Evaluation {
 // reads as two moored neighbours closing on each other.
 const STATIONARY_SPEED = 0.26
 
+// A boat at anchor can only be hit by steering into it, so it is judged by the
+// slow zones even while own ship is moving. Its reported speed must rise this
+// far above the stationary threshold before it counts as moving again.
+const STOPPED_RELEASE_SPEED = 0.51
+
 // A boat's speed must rise this far (m/s, about 0.5 kn) above the slow
 // threshold before the normal zones return, so speed noise around the
 // threshold does not swap the zones, and with them the alarm, every update.
@@ -167,6 +172,7 @@ export class Evaluator {
   private readonly levels = new Map<string, AlertLevel>()
   private slow = false
   private slowTargets = new Set<string>()
+  private stoppedTargets = new Set<string>()
   private asternTargets = new Set<string>()
   private readonly raised = new Set<string>()
   private readonly drift = new DriftDetector()
@@ -189,6 +195,7 @@ export class Evaluator {
     const evaluations: Evaluation[] = []
     const ownSlow = this.updateOwnSlow(own)
     const slowTargets = new Set<string>()
+    const stoppedTargets = new Set<string>()
     const asternTargets = new Set<string>()
     const candidates: Candidate[] = []
     const seen = new Set<string>()
@@ -214,7 +221,14 @@ export class Evaluator {
       if (targetSlow) {
         slowTargets.add(targetId)
       }
-      const zones = ownSlow && targetSlow ? this.options.slowZones : this.options.zones
+      // A boat found drifting is moving, whatever it reports.
+      const stopped =
+        target === reported &&
+        target.sog < (this.stoppedTargets.has(targetId) ? STOPPED_RELEASE_SPEED : STATIONARY_SPEED)
+      if (stopped) {
+        stoppedTargets.add(targetId)
+      }
+      const zones = targetSlow && (ownSlow || stopped) ? this.options.slowZones : this.options.zones
       // A target crossing behind us is no threat unless it comes really close,
       // so it raises nothing while its CPA stays outside the innermost zone's
       // distance. One that will come that close, such as a ship overtaking
@@ -233,6 +247,7 @@ export class Evaluator {
     }
 
     this.slowTargets = slowTargets
+    this.stoppedTargets = stoppedTargets
     this.asternTargets = asternTargets
     this.drift.retain(seen)
     this.levels.clear()
@@ -260,6 +275,7 @@ export class Evaluator {
   stop(): void {
     this.levels.clear()
     this.slowTargets.clear()
+    this.stoppedTargets.clear()
     this.asternTargets.clear()
     this.raised.clear()
     this.drift.clear()
