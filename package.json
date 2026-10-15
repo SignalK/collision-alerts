@@ -1,6 +1,6 @@
 {
   "name": "signalk-collision-alerts",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Collision alerts for Signal K: CPA/TCPA warnings for nearby traffic, raised through the Notifications API",
   "main": "plugin/index.js",
   "types": "plugin/index.d.ts",
