@@ -228,7 +228,10 @@ export class Evaluator {
       if (stopped) {
         stoppedTargets.add(targetId)
       }
-      const zones = targetSlow && (ownSlow || stopped) ? this.options.slowZones : this.options.zones
+      const zones =
+        (ownSlow && targetSlow) || (stopped && this.options.slowSpeed > 0)
+          ? this.options.slowZones
+          : this.options.zones
       // A target crossing behind us is no threat unless it comes really close,
       // so it raises nothing while its CPA stays outside the innermost zone's
       // distance. One that will come that close, such as a ship overtaking

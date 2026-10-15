@@ -271,9 +271,10 @@ describe('Evaluator', () => {
     })
 
     it('stays stopped while its reported speed hovers near the threshold', () => {
-      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // A Harbour-limits speed below the stopped boat's reported speed.
+      const { sink, ev } = setup({ slowSpeed: 0.1 })
       ev.evaluate(own, { [OTHER]: anchoredAt(0.2, 150) }, SELF, NOW)
-      ev.evaluate(own, { [OTHER]: anchoredAt(0.2, 150, 0.3) }, SELF, NOW)
+      ev.evaluate(own, { [OTHER]: anchoredAt(0.2, 150, 0.4) }, SELF, NOW)
       expect(sink.calls).toEqual([])
     })
   })
