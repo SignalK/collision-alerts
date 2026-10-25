@@ -29,7 +29,9 @@ function fakeApp(managed: boolean) {
     selfId: SELF,
     notifications,
     debug: vi.fn(),
+    error: vi.fn(),
     setPluginStatus: vi.fn(),
+    emitPropertyValue: vi.fn(),
     handleMessage: vi.fn<HandleMessage>(),
     getSelfPath: vi.fn(() => nav(50, 0, 5)),
     getPath: vi.fn((path: string): unknown =>
@@ -46,10 +48,7 @@ function fakeApp(managed: boolean) {
 
 describe('plugin', () => {
   beforeEach(() => vi.useFakeTimers())
-  afterEach(() => {
-    vi.useRealTimers()
-    globalThis.__signalk_collisionAlerts = undefined
-  })
+  afterEach(() => vi.useRealTimers())
 
   it('starts with an empty config and raises through the Notifications API', async () => {
     const { app, notifications, handleMessage } = fakeApp(true)
@@ -85,9 +84,33 @@ describe('plugin', () => {
     const { app } = fakeApp(true)
     const plugin = createPlugin(app)
     plugin.start({}, () => undefined)
-    expect(globalThis.__signalk_collisionAlerts).toEqual({ evaluatesTargets: true })
+    expect(app.emitPropertyValue).toHaveBeenLastCalledWith('collisionAlerts', {
+      evaluatesTargets: true
+    })
     await plugin.stop()
-    expect(globalThis.__signalk_collisionAlerts).toBeUndefined()
+    expect(app.emitPropertyValue).toHaveBeenLastCalledWith('collisionAlerts', {
+      evaluatesTargets: false
+    })
+  })
+
+  it('keeps raising alarms when the server refuses the announcement', async () => {
+    const { app, notifications } = fakeApp(true)
+    vi.mocked(app.emitPropertyValue).mockImplementation(() => {
+      throw new Error('Max PropertyValues count 1000 exceeded')
+    })
+    const plugin = createPlugin(app)
+    plugin.start({}, () => undefined)
+    vi.advanceTimersByTime(2000)
+    expect(notifications.raise).toHaveBeenCalledOnce()
+    expect(app.error).toHaveBeenCalledWith(expect.stringContaining('Max PropertyValues'))
+    await plugin.stop()
+    expect(notifications.clear).toHaveBeenCalledWith('n1')
+  })
+
+  it('emits nothing on a stop without a start', async () => {
+    const { app } = fakeApp(true)
+    await createPlugin(app).stop()
+    expect(app.emitPropertyValue).not.toHaveBeenCalled()
   })
 })
 

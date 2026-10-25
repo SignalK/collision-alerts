@@ -10,11 +10,11 @@ const PLUGIN_ID = 'signalk-collision-alerts'
 const NM = 1852
 const KNOT = 1852 / 3600
 
-declare global {
-  // Sensor plugins that raise collision alarms of their own (mayara for radar
-  // targets) stand down while this is set, so a target alarms once. A global,
-  // since each plugin gets its own shallow copy of `app`.
-  var __signalk_collisionAlerts: { evaluatesTargets: true } | undefined
+// Sensor plugins that raise collision alarms of their own (mayara for radar
+// targets) stand down while this property says so, so a target alarms once.
+const COLLISION_ALERTS_PROPERTY = 'collisionAlerts'
+interface CollisionAlertsProperty {
+  evaluatesTargets: boolean
 }
 
 function zonesFor(config: Config): Zone[] {
@@ -61,6 +61,23 @@ export default function (app: ServerAPI): Plugin {
         updates: [{ values: [{ path: 'navigation.closestApproach' as Path, value }] }]
       }
       app.handleMessage(PLUGIN_ID, delta)
+    }
+  }
+
+  // PropertyValues keep every emitted value, so emit on changes only.
+  let evaluatesTargets = false
+  function announce(running: boolean): void {
+    if (running === evaluatesTargets) {
+      return
+    }
+    const value: CollisionAlertsProperty = { evaluatesTargets: running }
+    try {
+      app.emitPropertyValue(COLLISION_ALERTS_PROPERTY, value)
+      evaluatesTargets = running
+    } catch (err) {
+      // The server caps PropertyValues across all plugins and throws past
+      // the cap; sensor plugins then keep their own alarms, never fewer.
+      app.error(`Could not announce collision alerts to other plugins: ${String(err)}`)
     }
   }
 
@@ -112,17 +129,17 @@ export default function (app: ServerAPI): Plugin {
           app.error(`Collision evaluation failed: ${String(err)}`)
         }
       }, config.interval * 1000)
-      globalThis.__signalk_collisionAlerts = { evaluatesTargets: true }
+      announce(true)
       app.setPluginStatus('Watching AIS, radar and other targets')
     },
 
     stop() {
-      globalThis.__signalk_collisionAlerts = undefined
       clearInterval(timer)
       timer = undefined
       evaluator?.stop()
       evaluator = undefined
       publishClosestApproach([])
+      announce(false)
     }
   }
 }
