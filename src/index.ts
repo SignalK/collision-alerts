@@ -17,11 +17,6 @@ interface CollisionAlertsProperty {
   evaluatesTargets: boolean
 }
 
-declare global {
-  // Older sensor plugins read this instead of the property value.
-  var __signalk_collisionAlerts: { evaluatesTargets: true } | undefined
-}
-
 function zonesFor(config: Config): Zone[] {
   return config.preset === 'custom' ? config.customZones : PRESETS[config.preset]
 }
@@ -78,7 +73,6 @@ export default function (app: ServerAPI): Plugin {
     evaluatesTargets = running
     const value: CollisionAlertsProperty = { evaluatesTargets: running }
     app.emitPropertyValue(COLLISION_ALERTS_PROPERTY, value)
-    globalThis.__signalk_collisionAlerts = running ? { evaluatesTargets: true } : undefined
   }
 
   return {

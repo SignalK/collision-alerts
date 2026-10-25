@@ -34,7 +34,6 @@ sensors raises one alarm.
   emitted only on changes, since PropertyValues keep their whole history.
   Sensor plugins with alarms of their own (the mayara plugin) stand down while
   it is true; removing or renaming it brings back duplicate radar alarms.
-  `globalThis.__signalk_collisionAlerts` mirrors it for older consumers.
 - **Alarms go through `app.notifications`** whenever the server manages
   notifications, so acknowledge/silence/clear work from every client. The delta
   fallback also sets the legacy `other` field for older consumers.
