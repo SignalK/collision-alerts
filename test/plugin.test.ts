@@ -30,6 +30,7 @@ function fakeApp(managed: boolean) {
     notifications,
     debug: vi.fn(),
     setPluginStatus: vi.fn(),
+    emitPropertyValue: vi.fn(),
     handleMessage: vi.fn<HandleMessage>(),
     getSelfPath: vi.fn(() => nav(50, 0, 5)),
     getPath: vi.fn((path: string): unknown =>
@@ -85,9 +86,21 @@ describe('plugin', () => {
     const { app } = fakeApp(true)
     const plugin = createPlugin(app)
     plugin.start({}, () => undefined)
+    expect(app.emitPropertyValue).toHaveBeenLastCalledWith('collisionAlerts', {
+      evaluatesTargets: true
+    })
     expect(globalThis.__signalk_collisionAlerts).toEqual({ evaluatesTargets: true })
     await plugin.stop()
+    expect(app.emitPropertyValue).toHaveBeenLastCalledWith('collisionAlerts', {
+      evaluatesTargets: false
+    })
     expect(globalThis.__signalk_collisionAlerts).toBeUndefined()
+  })
+
+  it('emits nothing on a stop without a start', async () => {
+    const { app } = fakeApp(true)
+    await createPlugin(app).stop()
+    expect(app.emitPropertyValue).not.toHaveBeenCalled()
   })
 })
 

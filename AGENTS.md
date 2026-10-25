@@ -29,10 +29,12 @@ sensors raises one alarm.
   `data: { targetRef, source, cpa, tcpa, range, cpaPositions }`. Radar and
   camera sources are meant to publish the same shape, and Freeboard-SK locates
   the target through `data.targetRef`. Changing it is a breaking change.
-- **`globalThis.__signalk_collisionAlerts`** is `{ evaluatesTargets: true }`
-  from `start()` until `stop()`. Sensor plugins with alarms of their own (the
-  mayara plugin) stand down while it is set; removing or renaming it brings
-  back duplicate radar alarms.
+- **The `collisionAlerts` PropertyValue** is `{ evaluatesTargets: true }`
+  from `start()` and `{ evaluatesTargets: false }` after `stop()`; it is
+  emitted only on changes, since PropertyValues keep their whole history.
+  Sensor plugins with alarms of their own (the mayara plugin) stand down while
+  it is true; removing or renaming it brings back duplicate radar alarms.
+  `globalThis.__signalk_collisionAlerts` mirrors it for older consumers.
 - **Alarms go through `app.notifications`** whenever the server manages
   notifications, so acknowledge/silence/clear work from every client. The delta
   fallback also sets the legacy `other` field for older consumers.
