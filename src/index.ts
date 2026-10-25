@@ -70,9 +70,15 @@ export default function (app: ServerAPI): Plugin {
     if (running === evaluatesTargets) {
       return
     }
-    evaluatesTargets = running
     const value: CollisionAlertsProperty = { evaluatesTargets: running }
-    app.emitPropertyValue(COLLISION_ALERTS_PROPERTY, value)
+    try {
+      app.emitPropertyValue(COLLISION_ALERTS_PROPERTY, value)
+      evaluatesTargets = running
+    } catch (err) {
+      // The server caps PropertyValues across all plugins and throws past
+      // the cap; sensor plugins then keep their own alarms, never fewer.
+      app.error(`Could not announce collision alerts to other plugins: ${String(err)}`)
+    }
   }
 
   return {
@@ -128,12 +134,12 @@ export default function (app: ServerAPI): Plugin {
     },
 
     stop() {
-      announce(false)
       clearInterval(timer)
       timer = undefined
       evaluator?.stop()
       evaluator = undefined
       publishClosestApproach([])
+      announce(false)
     }
   }
 }
