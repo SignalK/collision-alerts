@@ -10,7 +10,7 @@ on:
 
 jobs:
   publish:
-    if: github.repository == 'dirkwa/signalk-collision-alerts'
+    if: github.repository == 'SignalK/collision-alerts'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
