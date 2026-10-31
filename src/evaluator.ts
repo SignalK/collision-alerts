@@ -140,9 +140,9 @@ export class OwnShip {
       maxAge,
       this.stopped ? STOPPED_RELEASE_SPEED : STATIONARY_SPEED
     )
-    // Without fresh data the boat may have got under way meanwhile, so it
-    // starts over as on a restart.
-    this.stopped = track ? track.sog === 0 : true
+    if (track) {
+      this.stopped = track.sog === 0
+    }
     return track
   }
 }
@@ -207,9 +207,8 @@ export class Evaluator {
   private readonly levels = new Map<string, AlertLevel>()
   private slow = false
   private slowTargets = new Set<string>()
-  private stoppedTargets = new Set<string>()
-  /** Targets that had a fresh track last time. */
-  private tracked = new Set<string>()
+  /** Targets last reported moving; any other counts as stopped. */
+  private movingTargets = new Set<string>()
   private asternTargets = new Set<string>()
   private readonly raised = new Set<string>()
   private readonly drift = new DriftDetector()
@@ -232,9 +231,8 @@ export class Evaluator {
     const evaluations: Evaluation[] = []
     const ownSlow = this.updateOwnSlow(own)
     const slowTargets = new Set<string>()
-    const stoppedTargets = new Set<string>()
+    const movingTargets = new Set<string>()
     const asternTargets = new Set<string>()
-    const tracked = new Set<string>()
     const candidates: Candidate[] = []
     const seen = new Set<string>()
 
@@ -245,7 +243,7 @@ export class Evaluator {
       seen.add(targetId)
       // Like own ship, a boat first seen starts out stopped, so a restart in
       // a crowded anchorage does not take every neighbour's gust for motion.
-      const wasStopped = this.stoppedTargets.has(targetId) || !this.tracked.has(targetId)
+      const wasStopped = !this.movingTargets.has(targetId)
       const reported = own
         ? toTrack(
             node,
@@ -255,11 +253,9 @@ export class Evaluator {
           )
         : null
       const target = reported && this.drift.apply(targetId, reported, positionTime(node))
-      if (reported) {
-        tracked.add(targetId)
-        if (reported.sog === 0) {
-          stoppedTargets.add(targetId)
-        }
+      // Without a fresh track a boat keeps its state.
+      if (reported ? reported.sog > 0 : !wasStopped) {
+        movingTargets.add(targetId)
       }
       // A boat found drifting is moving, whatever it reports.
       const stopped = reported?.sog === 0 && target === reported
@@ -299,8 +295,7 @@ export class Evaluator {
     }
 
     this.slowTargets = slowTargets
-    this.stoppedTargets = stoppedTargets
-    this.tracked = tracked
+    this.movingTargets = movingTargets
     this.asternTargets = asternTargets
     this.drift.retain(seen)
     this.levels.clear()
@@ -328,8 +323,7 @@ export class Evaluator {
   stop(): void {
     this.levels.clear()
     this.slowTargets.clear()
-    this.stoppedTargets.clear()
-    this.tracked.clear()
+    this.movingTargets.clear()
     this.asternTargets.clear()
     this.raised.clear()
     this.drift.clear()

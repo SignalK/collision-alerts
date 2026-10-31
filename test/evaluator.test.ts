@@ -96,11 +96,11 @@ describe('OwnShip', () => {
     expect(ownShip.track(vessel(50, 1, 90, 0.2), NOW, 360)).toMatchObject({ sog: 0 })
   })
 
-  it('starts over as stopped once own data has gone missing', () => {
+  it('stays moving through a gap in its own data', () => {
     const ownShip = new OwnShip()
     ownShip.track(vessel(50, 1, 90, 0.6), NOW, 360)
     expect(ownShip.track(undefined, NOW, 360)).toBeNull()
-    expect(ownShip.track(vessel(50, 1, 90, 0.45), NOW, 360)).toMatchObject({ sog: 0 })
+    expect(ownShip.track(vessel(50, 1, 90, 0.45), NOW, 360)).toMatchObject({ sog: 0.45 })
   })
 
   it('does not alarm for a neighbour at anchor while own GPS speed is gust noise', () => {
@@ -153,6 +153,17 @@ describe('Evaluator', () => {
     // 60 m north, now reporting 0.9 kn straight at us.
     ev.evaluate(anchored, { [OTHER]: vessel(north, 1, 180, 0.46) }, SELF, NOW)
     expect(sink.calls).toHaveLength(0)
+  })
+
+  it('keeps a neighbour moving through a gap in own ship data', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour })
+    const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    // 120 m north at 0.8 kn straight at us.
+    const closing = { [OTHER]: vessel(50 + 120 / 1852 / 60, 1, 180, 0.41) }
+    ev.evaluate(anchored, { [OTHER]: vessel(50 + 120 / 1852 / 60, 1, 180, 0.6) }, SELF, NOW)
+    ev.evaluate(null, closing, SELF, NOW)
+    ev.evaluate(anchored, closing, SELF, NOW)
+    expect(sink.calls.at(-1)).toEqual([OTHER, expect.objectContaining({ level: 'warn' })])
   })
 
   it('takes a neighbour first seen at 0.9 kn for a boat at anchor', () => {
