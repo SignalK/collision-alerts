@@ -103,6 +103,14 @@ describe('Evaluator', () => {
     expect(sink.calls).toHaveLength(0)
   })
 
+  it('alarms for a boat closing slowly on one at anchor', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour })
+    const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    // 100 m north at 1 kn (0.51 m/s) straight at us: closest approach in about 3 min.
+    ev.evaluate(anchored, { [OTHER]: vessel(50 + 100 / 1852 / 60, 1, 180, 0.51) }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+  })
+
   it('clears the alarm once a neighbour that closed on us at anchor stops', () => {
     const { sink, ev } = setup({ zones: PRESETS.harbour })
     const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
@@ -111,14 +119,6 @@ describe('Evaluator', () => {
     expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
     ev.evaluate(anchored, { [OTHER]: vessel(north, 1, 180, 0.1) }, SELF, NOW)
     expect(sink.calls.at(-1)).toEqual([OTHER, undefined])
-  })
-
-  it('alarms for a boat closing slowly on one at anchor', () => {
-    const { sink, ev } = setup({ zones: PRESETS.harbour })
-    const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
-    // 100 m north at 1 kn (0.51 m/s) straight at us: closest approach in about 3 min.
-    ev.evaluate(anchored, { [OTHER]: vessel(50 + 100 / 1852 / 60, 1, 180, 0.51) }, SELF, NOW)
-    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
   })
 
   describe('a target crossing our track', () => {
