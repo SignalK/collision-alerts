@@ -26,7 +26,7 @@ If you used the CPA calculation in **SK Derived Data**, turn it off there so you
 
 While you and another boat are both slower than 3 kn (**Use Harbour limits when both boats are slower than**), that boat is judged by the Harbour limits, so the boats at anchor you motor past on arrival don't alarm. A boat that is stopped is judged by the Harbour limits at any speed of yours: it can only be hit by steering into it, so passing an anchorage half a mile off raises nothing, while heading straight for an anchored boat still does. A faster boat keeps your chosen limits, and so does one found dragging its anchor. Set it to 0 to turn this off.
 
-A boat slower than 0.5 kn counts as stopped: boats at anchor report a speed and course that are mostly noise, so two of them never alarm on each other. Anything actually moving towards you still does.
+A boat slower than 0.5 kn counts as stopped: boats at anchor report a speed and course that are mostly noise, so two of them never alarm on each other. Anything actually moving towards you still does. Between 0.5 and 1 kn, a boat's reported speed, your own included, counts only once its position has moved about that far over two and a half minutes, or between two AIS reports: a boat yawing at anchor in gusts reports that much while it stays put.
 
 A boat that will pass behind you, more than about 105° off your bow at its closest point, raises nothing unless it will come inside the alarm distance, because a boat crossing your wake is not on a collision course. One that will come that close warns and alarms as usual.
 

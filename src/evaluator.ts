@@ -1,6 +1,7 @@
 import { computeCpa, type CpaResult, type Track } from './cpa.js'
 import type { AlarmSink, CollisionAlert } from './alarms.js'
 import { DriftDetector } from './drift.js'
+import { MotionCheck } from './motion.js'
 import { assess, SEVERITY, type AlertLevel, type Zone } from './zones.js'
 
 /** The fields of a vessel node in the Signal K full data model that we read. */
@@ -55,11 +56,6 @@ export interface Evaluation {
 // their position stays within a few metres; taken at face value, that noise
 // reads as two moored neighbours closing on each other.
 const STATIONARY_SPEED = 0.26
-
-// A boat at anchor can only be hit by steering into it, so it is judged by the
-// slow zones even while own ship is moving. Its reported speed must rise this
-// far above the stationary threshold before it counts as moving again.
-const STOPPED_RELEASE_SPEED = 0.51
 
 // A boat's speed must rise this far (m/s, about 0.5 kn) above the slow
 // threshold before the normal zones return, so speed noise around the
@@ -172,9 +168,9 @@ export class Evaluator {
   private readonly levels = new Map<string, AlertLevel>()
   private slow = false
   private slowTargets = new Set<string>()
-  private stoppedTargets = new Set<string>()
   private asternTargets = new Set<string>()
   private readonly raised = new Set<string>()
+  private readonly motion = new MotionCheck()
   private readonly drift = new DriftDetector()
 
   constructor(
@@ -195,7 +191,6 @@ export class Evaluator {
     const evaluations: Evaluation[] = []
     const ownSlow = this.updateOwnSlow(own)
     const slowTargets = new Set<string>()
-    const stoppedTargets = new Set<string>()
     const asternTargets = new Set<string>()
     const candidates: Candidate[] = []
     const seen = new Set<string>()
@@ -205,8 +200,10 @@ export class Evaluator {
         continue
       }
       seen.add(targetId)
-      const reported = own ? toTrack(node, nowMs, this.options.maxAge) : null
-      const target = reported && this.drift.apply(targetId, reported, positionTime(node))
+      const time = positionTime(node)
+      const raw = own ? toTrack(node, nowMs, this.options.maxAge) : null
+      const reported = raw && this.motion.apply(targetId, raw, time)
+      const target = reported && this.drift.apply(targetId, reported, time)
       const result = own && target ? computeCpa(own, target) : null
       const context = contextOf(targetId, node)
       if (!target || !result || result.range > this.options.maxRange) {
@@ -221,13 +218,10 @@ export class Evaluator {
       if (targetSlow) {
         slowTargets.add(targetId)
       }
-      // A boat found drifting is moving, whatever it reports.
-      const stopped =
-        target === reported &&
-        target.sog < (this.stoppedTargets.has(targetId) ? STOPPED_RELEASE_SPEED : STATIONARY_SPEED)
-      if (stopped) {
-        stoppedTargets.add(targetId)
-      }
+      // A boat at anchor can only be hit by steering into it, so it is judged
+      // by the slow zones even while own ship is moving. A boat found
+      // drifting is moving, whatever it reports.
+      const stopped = target === reported && target.sog === 0
       const zones =
         (ownSlow && targetSlow) || (stopped && this.options.slowSpeed > 0)
           ? this.options.slowZones
@@ -250,8 +244,8 @@ export class Evaluator {
     }
 
     this.slowTargets = slowTargets
-    this.stoppedTargets = stoppedTargets
     this.asternTargets = asternTargets
+    this.motion.retain(seen)
     this.drift.retain(seen)
     this.levels.clear()
     for (const c of candidates) {
@@ -278,9 +272,9 @@ export class Evaluator {
   stop(): void {
     this.levels.clear()
     this.slowTargets.clear()
-    this.stoppedTargets.clear()
     this.asternTargets.clear()
     this.raised.clear()
+    this.motion.clear()
     this.drift.clear()
     this.sink.clearAll()
   }

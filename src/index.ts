@@ -1,6 +1,7 @@
 import type { Context, Delta, Path, Plugin, ServerAPI } from '@signalk/server-api'
 import { DeltaAlarmSink, ManagedAlarmSink, type AlarmSink } from './alarms.js'
 import { DriftDetector } from './drift.js'
+import { MotionCheck } from './motion.js'
 import { Evaluator, positionTime, toTrack, type Evaluation, type VesselNode } from './evaluator.js'
 import { ConfigSchema, DEFAULTS, type Config } from './config.js'
 import { PRESETS, type Zone } from './zones.js'
@@ -103,6 +104,7 @@ export default function (app: ServerAPI): Plugin {
         createSink(app)
       )
       evaluator = activeEvaluator
+      const ownMotion = new MotionCheck()
       const ownDrift = new DriftDetector()
 
       timer = setInterval(() => {
@@ -110,10 +112,12 @@ export default function (app: ServerAPI): Plugin {
         try {
           const now = Date.now()
           const ownNode = { navigation: app.getSelfPath('navigation') as VesselNode['navigation'] }
-          const reported = toTrack(ownNode, now, maxAge)
-          // Own ship drifts or swings at anchor like its neighbours; judged
-          // alike, two boats moving together do not close on each other.
-          const own = reported && ownDrift.apply('self', reported, positionTime(ownNode))
+          const time = positionTime(ownNode)
+          const raw = toTrack(ownNode, now, maxAge)
+          // Own ship yaws, drifts and swings at anchor like its neighbours;
+          // judged alike, two boats lying together do not close on each other.
+          const reported = raw && ownMotion.apply('self', raw, time)
+          const own = reported && ownDrift.apply('self', reported, time)
           // Radar and camera targets linked to an AIS vessel fold into it, so
           // a boat seen on both raises one alarm rather than one per sensor.
           const vessels = targetNodes(
