@@ -1,7 +1,7 @@
 import type { Context, Delta, Path, Plugin, ServerAPI } from '@signalk/server-api'
 import { DeltaAlarmSink, ManagedAlarmSink, type AlarmSink } from './alarms.js'
 import { DriftDetector } from './drift.js'
-import { Evaluator, positionTime, toTrack, type Evaluation, type VesselNode } from './evaluator.js'
+import { Evaluator, OwnShip, positionTime, type Evaluation, type VesselNode } from './evaluator.js'
 import { ConfigSchema, DEFAULTS, type Config } from './config.js'
 import { PRESETS, type Zone } from './zones.js'
 import { targetNodes, type SensorTargetNode } from './targets.js'
@@ -103,6 +103,7 @@ export default function (app: ServerAPI): Plugin {
         createSink(app)
       )
       evaluator = activeEvaluator
+      const ownShip = new OwnShip()
       const ownDrift = new DriftDetector()
 
       timer = setInterval(() => {
@@ -110,7 +111,7 @@ export default function (app: ServerAPI): Plugin {
         try {
           const now = Date.now()
           const ownNode = { navigation: app.getSelfPath('navigation') as VesselNode['navigation'] }
-          const reported = toTrack(ownNode, now, maxAge)
+          const reported = ownShip.track(ownNode, now, maxAge)
           // Own ship drifts or swings at anchor like its neighbours; judged
           // alike, two boats moving together do not close on each other.
           const own = reported && ownDrift.apply('self', reported, positionTime(ownNode))
