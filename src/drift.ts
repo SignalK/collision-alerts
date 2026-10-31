@@ -11,8 +11,8 @@ import type { LatLon, Track } from './cpa.js'
 // moves in a straight line. Only movement long and straight enough to tell
 // the two apart counts as drift.
 
-/** How far back positions are kept, ms. AIS boats at anchor report every 3 min. */
-const WINDOW = 10 * 60_000
+/** How far back positions are kept, ms: long enough for a drag at 0.1 kn to cover MIN_DRIFT, and for a swing to show its arc. AIS boats at anchor report every 3 min. */
+const WINDOW = 20 * 60_000
 /** Positions closer together in time than this are skipped, ms. */
 const SAMPLE_SPACING = 30_000
 /** The positions must span at least this long before drift is judged, ms. */
