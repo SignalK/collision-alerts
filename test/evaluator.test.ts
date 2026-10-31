@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AlarmSink, CollisionAlert } from '../src/alarms.js'
-import {
-  Evaluator,
-  OwnShip,
-  toTrack,
-  type EvaluatorOptions,
-  type VesselNode
-} from '../src/evaluator.js'
+import { Evaluator, toTrack, type EvaluatorOptions, type VesselNode } from '../src/evaluator.js'
 import { PRESETS } from '../src/zones.js'
 import { defined } from './helpers.js'
 
@@ -78,42 +72,6 @@ describe('toTrack', () => {
   })
 })
 
-describe('OwnShip', () => {
-  it('stays stopped at anchor while gusts yaw the GPS speed up to 1 kn', () => {
-    const ownShip = new OwnShip()
-    expect(ownShip.track(vessel(50, 1, 40, 0.1), NOW, 360)).toMatchObject({ sog: 0 })
-    expect(ownShip.track(vessel(50, 1, 220, 0.45), NOW, 360)).toMatchObject({ sog: 0 })
-  })
-
-  it('starts out stopped, so a restart at anchor in a gust raises nothing', () => {
-    expect(new OwnShip().track(vessel(50, 1, 220, 0.45), NOW, 360)).toMatchObject({ sog: 0 })
-  })
-
-  it('moves once faster than 1 kn, and stops again below 0.5 kn', () => {
-    const ownShip = new OwnShip()
-    expect(ownShip.track(vessel(50, 1, 90, 0.6), NOW, 360)).toMatchObject({ sog: 0.6 })
-    expect(ownShip.track(vessel(50, 1, 90, 0.45), NOW, 360)).toMatchObject({ sog: 0.45 })
-    expect(ownShip.track(vessel(50, 1, 90, 0.2), NOW, 360)).toMatchObject({ sog: 0 })
-  })
-
-  it('stays moving through a gap in its own data', () => {
-    const ownShip = new OwnShip()
-    ownShip.track(vessel(50, 1, 90, 0.6), NOW, 360)
-    expect(ownShip.track(undefined, NOW, 360)).toBeNull()
-    expect(ownShip.track(vessel(50, 1, 90, 0.45), NOW, 360)).toMatchObject({ sog: 0.45 })
-  })
-
-  it('does not alarm for a neighbour at anchor while own GPS speed is gust noise', () => {
-    const { sink, ev } = setup({ zones: PRESETS.harbour })
-    const ownShip = new OwnShip()
-    // 60 m north; own GPS reports 0.9 kn straight at it.
-    const neighbour = { [OTHER]: vessel(50 + 60 / 1852 / 60, 1, 0, 0.05) }
-    ev.evaluate(ownShip.track(vessel(50, 1, 0, 0.2), NOW, 360), neighbour, SELF, NOW)
-    ev.evaluate(ownShip.track(vessel(50, 1, 0, 0.45), NOW, 360), neighbour, SELF, NOW)
-    expect(sink.calls).toHaveLength(0)
-  })
-})
-
 describe('a boat dragging its anchor', () => {
   it('alarms although it reports being stopped', () => {
     const { sink, ev } = setup()
@@ -145,32 +103,27 @@ describe('Evaluator', () => {
     expect(sink.calls).toHaveLength(0)
   })
 
-  it('does not alarm for a neighbour at anchor whose AIS speed rises to 1 kn in a gust', () => {
+  it('does not alarm for a neighbour at anchor reporting 0.9 kn as it yaws in a gust', () => {
     const { sink, ev } = setup({ zones: PRESETS.harbour })
     const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
-    const north = 50 + 60 / 1852 / 60
-    ev.evaluate(anchored, { [OTHER]: vessel(north, 1, 90, 0.1) }, SELF, NOW)
-    // 60 m north, now reporting 0.9 kn straight at us.
-    ev.evaluate(anchored, { [OTHER]: vessel(north, 1, 180, 0.46) }, SELF, NOW)
-    expect(sink.calls).toHaveLength(0)
-  })
-
-  it('keeps a neighbour moving through a gap in own ship data', () => {
-    const { sink, ev } = setup({ zones: PRESETS.harbour })
-    const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
-    // 120 m north at 0.8 kn straight at us.
-    const closing = { [OTHER]: vessel(50 + 120 / 1852 / 60, 1, 180, 0.41) }
-    ev.evaluate(anchored, { [OTHER]: vessel(50 + 120 / 1852 / 60, 1, 180, 0.6) }, SELF, NOW)
-    ev.evaluate(null, closing, SELF, NOW)
-    ev.evaluate(anchored, closing, SELF, NOW)
-    expect(sink.calls.at(-1)).toEqual([OTHER, expect.objectContaining({ level: 'warn' })])
-  })
-
-  it('takes a neighbour first seen at 0.9 kn for a boat at anchor', () => {
-    const { sink, ev } = setup({ zones: PRESETS.harbour })
-    const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    // 60 m north, reporting 0.9 kn straight at us.
     ev.evaluate(anchored, { [OTHER]: vessel(50 + 60 / 1852 / 60, 1, 180, 0.46) }, SELF, NOW)
     expect(sink.calls).toHaveLength(0)
+  })
+
+  it('alarms for a boat closing at 0.9 kn once its position bears that out', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour })
+    const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    // From 250 m north at 0.9 kn straight at us, reporting every 10 s, until
+    // its closest approach is 5 min away.
+    for (let s = 0; s <= 250; s += 10) {
+      const closing = vessel(50 + (250 - 0.46 * s) / 1852 / 60, 1, 180, 0.46)
+      defined(defined(closing.navigation).position).timestamp = new Date(
+        NOW + s * 1000
+      ).toISOString()
+      ev.evaluate(anchored, { [OTHER]: closing }, SELF, NOW + s * 1000)
+    }
+    expect(sink.calls.at(-1)).toEqual([OTHER, expect.objectContaining({ level: 'warn' })])
   })
 
   it('alarms for a boat closing slowly on one at anchor', () => {

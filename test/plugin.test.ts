@@ -114,6 +114,25 @@ describe('plugin', () => {
   })
 })
 
+describe('plugin at anchor', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('does not take own ship yawing in a gust for motion towards a neighbour', async () => {
+    const { app, notifications } = fakeApp(true)
+    // Own GPS reports 0.9 kn straight at the neighbour 60 m north, lying still.
+    vi.mocked(app.getSelfPath).mockImplementation(() => nav(50, 0, 0.46))
+    vi.mocked(app.getPath).mockImplementation((path: string): unknown =>
+      path === 'vessels' ? { [OTHER]: { navigation: nav(50 + 60 / 1852 / 60, 0, 0) } } : undefined
+    )
+    const plugin = createPlugin(app)
+    plugin.start({}, () => undefined)
+    vi.advanceTimersByTime(300_000)
+    expect(notifications.raise).not.toHaveBeenCalled()
+    await plugin.stop()
+  })
+})
+
 describe('plugin with sensor targets', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())

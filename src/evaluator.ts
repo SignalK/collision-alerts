@@ -1,6 +1,7 @@
 import { computeCpa, type CpaResult, type Track } from './cpa.js'
 import type { AlarmSink, CollisionAlert } from './alarms.js'
 import { DriftDetector } from './drift.js'
+import { MotionCheck } from './motion.js'
 import { assess, SEVERITY, type AlertLevel, type Zone } from './zones.js'
 
 /** The fields of a vessel node in the Signal K full data model that we read. */
@@ -56,12 +57,6 @@ export interface Evaluation {
 // reads as two moored neighbours closing on each other.
 const STATIONARY_SPEED = 0.26
 
-// A boat at anchor can only be hit by steering into it, so it is judged by the
-// slow zones even while own ship is moving. Yawing in gusts, it reports up to
-// a knot, so once stopped it stays stopped, and still, until its reported
-// speed rises this far above the stationary threshold.
-const STOPPED_RELEASE_SPEED = 0.51
-
 // A boat's speed must rise this far (m/s, about 0.5 kn) above the slow
 // threshold before the normal zones return, so speed noise around the
 // threshold does not swap the zones, and with them the alarm, every update.
@@ -86,15 +81,7 @@ interface Candidate {
   target: Track
 }
 
-/**
- * @param stoppedBelow speed (m/s) below which the vessel counts as stopped
- */
-export function toTrack(
-  node: VesselNode | undefined,
-  nowMs: number,
-  maxAge: number,
-  stoppedBelow = STATIONARY_SPEED
-): Track | null {
+export function toTrack(node: VesselNode | undefined, nowMs: number, maxAge: number): Track | null {
   const nav = node?.navigation
   if (!nav?.position || !nav.speedOverGround) {
     return null
@@ -111,7 +98,7 @@ export function toTrack(
     return null
   }
   const position = { latitude, longitude }
-  if (sog < stoppedBelow) {
+  if (sog < STATIONARY_SPEED) {
     return { position, sog: 0, cog: 0 }
   }
   const cog = nav.courseOverGroundTrue?.value
@@ -119,32 +106,6 @@ export function toTrack(
     return null
   }
   return { position, sog, cog }
-}
-
-/**
- * Own ship's reported track. At anchor, own GPS reports the yaw of the hull,
- * in gusts often above half a knot with a course all round the compass, which
- * would set own ship moving towards every neighbour in turn. Stopped, own ship
- * needs the speed a stopped target needs before it counts as moving again;
- * real motion slower than that is left to the drift detector, as for targets.
- * It starts out stopped: the server mostly starts with the boat in harbour or
- * at anchor, and under way it is soon faster than that.
- */
-export class OwnShip {
-  private stopped = true
-
-  track(node: VesselNode | undefined, nowMs: number, maxAge: number): Track | null {
-    const track = toTrack(
-      node,
-      nowMs,
-      maxAge,
-      this.stopped ? STOPPED_RELEASE_SPEED : STATIONARY_SPEED
-    )
-    if (track) {
-      this.stopped = track.sog === 0
-    }
-    return track
-  }
 }
 
 /** When the vessel's position was reported, ms since the epoch; NaN when unknown. */
@@ -207,10 +168,9 @@ export class Evaluator {
   private readonly levels = new Map<string, AlertLevel>()
   private slow = false
   private slowTargets = new Set<string>()
-  /** Targets last reported moving; any other counts as stopped. */
-  private movingTargets = new Set<string>()
   private asternTargets = new Set<string>()
   private readonly raised = new Set<string>()
+  private readonly motion = new MotionCheck()
   private readonly drift = new DriftDetector()
 
   constructor(
@@ -231,7 +191,6 @@ export class Evaluator {
     const evaluations: Evaluation[] = []
     const ownSlow = this.updateOwnSlow(own)
     const slowTargets = new Set<string>()
-    const movingTargets = new Set<string>()
     const asternTargets = new Set<string>()
     const candidates: Candidate[] = []
     const seen = new Set<string>()
@@ -241,24 +200,10 @@ export class Evaluator {
         continue
       }
       seen.add(targetId)
-      // Like own ship, a boat first seen starts out stopped, so a restart in
-      // a crowded anchorage does not take every neighbour's gust for motion.
-      const wasStopped = !this.movingTargets.has(targetId)
-      const reported = own
-        ? toTrack(
-            node,
-            nowMs,
-            this.options.maxAge,
-            wasStopped ? STOPPED_RELEASE_SPEED : STATIONARY_SPEED
-          )
-        : null
-      const target = reported && this.drift.apply(targetId, reported, positionTime(node))
-      // Without a fresh track a boat keeps its state.
-      if (reported ? reported.sog > 0 : !wasStopped) {
-        movingTargets.add(targetId)
-      }
-      // A boat found drifting is moving, whatever it reports.
-      const stopped = reported?.sog === 0 && target === reported
+      const time = positionTime(node)
+      const raw = own ? toTrack(node, nowMs, this.options.maxAge) : null
+      const reported = raw && this.motion.apply(targetId, raw, time)
+      const target = reported && this.drift.apply(targetId, reported, time)
       const result = own && target ? computeCpa(own, target) : null
       const context = contextOf(targetId, node)
       if (!target || !result || result.range > this.options.maxRange) {
@@ -273,6 +218,10 @@ export class Evaluator {
       if (targetSlow) {
         slowTargets.add(targetId)
       }
+      // A boat at anchor can only be hit by steering into it, so it is judged
+      // by the slow zones even while own ship is moving. A boat found
+      // drifting is moving, whatever it reports.
+      const stopped = target === reported && target.sog === 0
       const zones =
         (ownSlow && targetSlow) || (stopped && this.options.slowSpeed > 0)
           ? this.options.slowZones
@@ -295,8 +244,8 @@ export class Evaluator {
     }
 
     this.slowTargets = slowTargets
-    this.movingTargets = movingTargets
     this.asternTargets = asternTargets
+    this.motion.retain(seen)
     this.drift.retain(seen)
     this.levels.clear()
     for (const c of candidates) {
@@ -323,9 +272,9 @@ export class Evaluator {
   stop(): void {
     this.levels.clear()
     this.slowTargets.clear()
-    this.movingTargets.clear()
     this.asternTargets.clear()
     this.raised.clear()
+    this.motion.clear()
     this.drift.clear()
     this.sink.clearAll()
   }
