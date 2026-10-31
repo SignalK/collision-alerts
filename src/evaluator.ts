@@ -57,8 +57,9 @@ export interface Evaluation {
 const STATIONARY_SPEED = 0.26
 
 // A boat at anchor can only be hit by steering into it, so it is judged by the
-// slow zones even while own ship is moving. Its reported speed must rise this
-// far above the stationary threshold before it counts as moving again.
+// slow zones even while own ship is moving. Yawing in gusts, it reports up to
+// a knot, so once stopped it stays stopped, and still, until its reported
+// speed rises this far above the stationary threshold.
 const STOPPED_RELEASE_SPEED = 0.51
 
 // A boat's speed must rise this far (m/s, about 0.5 kn) above the slow
@@ -85,7 +86,15 @@ interface Candidate {
   target: Track
 }
 
-export function toTrack(node: VesselNode | undefined, nowMs: number, maxAge: number): Track | null {
+/**
+ * @param stoppedBelow speed (m/s) below which the vessel counts as stopped
+ */
+export function toTrack(
+  node: VesselNode | undefined,
+  nowMs: number,
+  maxAge: number,
+  stoppedBelow = STATIONARY_SPEED
+): Track | null {
   const nav = node?.navigation
   if (!nav?.position || !nav.speedOverGround) {
     return null
@@ -102,7 +111,7 @@ export function toTrack(node: VesselNode | undefined, nowMs: number, maxAge: num
     return null
   }
   const position = { latitude, longitude }
-  if (sog < STATIONARY_SPEED) {
+  if (sog < stoppedBelow) {
     return { position, sog: 0, cog: 0 }
   }
   const cog = nav.courseOverGroundTrue?.value
@@ -110,6 +119,32 @@ export function toTrack(node: VesselNode | undefined, nowMs: number, maxAge: num
     return null
   }
   return { position, sog, cog }
+}
+
+/**
+ * Own ship's reported track. At anchor, own GPS reports the yaw of the hull,
+ * in gusts often above half a knot with a course all round the compass, which
+ * would set own ship moving towards every neighbour in turn. Stopped, own ship
+ * needs the speed a stopped target needs before it counts as moving again;
+ * real motion slower than that is left to the drift detector, as for targets.
+ * It starts out stopped: the server mostly starts with the boat in harbour or
+ * at anchor, and under way it is soon faster than that.
+ */
+export class OwnShip {
+  private stopped = true
+
+  track(node: VesselNode | undefined, nowMs: number, maxAge: number): Track | null {
+    const track = toTrack(
+      node,
+      nowMs,
+      maxAge,
+      this.stopped ? STOPPED_RELEASE_SPEED : STATIONARY_SPEED
+    )
+    // Without fresh data the boat may have got under way meanwhile, so it
+    // starts over as on a restart.
+    this.stopped = track ? track.sog === 0 : true
+    return track
+  }
 }
 
 /** When the vessel's position was reported, ms since the epoch; NaN when unknown. */
@@ -173,6 +208,8 @@ export class Evaluator {
   private slow = false
   private slowTargets = new Set<string>()
   private stoppedTargets = new Set<string>()
+  /** Targets that had a fresh track last time. */
+  private tracked = new Set<string>()
   private asternTargets = new Set<string>()
   private readonly raised = new Set<string>()
   private readonly drift = new DriftDetector()
@@ -197,6 +234,7 @@ export class Evaluator {
     const slowTargets = new Set<string>()
     const stoppedTargets = new Set<string>()
     const asternTargets = new Set<string>()
+    const tracked = new Set<string>()
     const candidates: Candidate[] = []
     const seen = new Set<string>()
 
@@ -205,8 +243,26 @@ export class Evaluator {
         continue
       }
       seen.add(targetId)
-      const reported = own ? toTrack(node, nowMs, this.options.maxAge) : null
+      // Like own ship, a boat first seen starts out stopped, so a restart in
+      // a crowded anchorage does not take every neighbour's gust for motion.
+      const wasStopped = this.stoppedTargets.has(targetId) || !this.tracked.has(targetId)
+      const reported = own
+        ? toTrack(
+            node,
+            nowMs,
+            this.options.maxAge,
+            wasStopped ? STOPPED_RELEASE_SPEED : STATIONARY_SPEED
+          )
+        : null
       const target = reported && this.drift.apply(targetId, reported, positionTime(node))
+      if (reported) {
+        tracked.add(targetId)
+        if (reported.sog === 0) {
+          stoppedTargets.add(targetId)
+        }
+      }
+      // A boat found drifting is moving, whatever it reports.
+      const stopped = reported?.sog === 0 && target === reported
       const result = own && target ? computeCpa(own, target) : null
       const context = contextOf(targetId, node)
       if (!target || !result || result.range > this.options.maxRange) {
@@ -220,13 +276,6 @@ export class Evaluator {
       const targetSlow = isSlow(target.sog, this.options.slowSpeed, this.slowTargets.has(targetId))
       if (targetSlow) {
         slowTargets.add(targetId)
-      }
-      // A boat found drifting is moving, whatever it reports.
-      const stopped =
-        target === reported &&
-        target.sog < (this.stoppedTargets.has(targetId) ? STOPPED_RELEASE_SPEED : STATIONARY_SPEED)
-      if (stopped) {
-        stoppedTargets.add(targetId)
       }
       const zones =
         (ownSlow && targetSlow) || (stopped && this.options.slowSpeed > 0)
@@ -251,6 +300,7 @@ export class Evaluator {
 
     this.slowTargets = slowTargets
     this.stoppedTargets = stoppedTargets
+    this.tracked = tracked
     this.asternTargets = asternTargets
     this.drift.retain(seen)
     this.levels.clear()
@@ -279,6 +329,7 @@ export class Evaluator {
     this.levels.clear()
     this.slowTargets.clear()
     this.stoppedTargets.clear()
+    this.tracked.clear()
     this.asternTargets.clear()
     this.raised.clear()
     this.drift.clear()
