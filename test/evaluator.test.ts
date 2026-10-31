@@ -117,8 +117,29 @@ describe('Evaluator', () => {
     const north = 50 + 80 / 1852 / 60
     ev.evaluate(anchored, { [OTHER]: vessel(north, 1, 180, 1) }, SELF, NOW)
     expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
-    ev.evaluate(anchored, { [OTHER]: vessel(north, 1, 180, 0.1) }, SELF, NOW)
+    const still = { [OTHER]: vessel(north, 1, 180, 0.1) }
+    // Held through a moment's pause, like a target just past closest approach.
+    ev.evaluate(anchored, still, SELF, NOW)
+    ev.evaluate(anchored, still, SELF, NOW + 20_000)
+    expect(sink.calls.at(-1)).toEqual([OTHER, expect.objectContaining({ level: 'warn' })])
+    ev.evaluate(anchored, still, SELF, NOW + 40_000)
     expect(sink.calls.at(-1)).toEqual([OTHER, undefined])
+  })
+
+  it('ranks a boat that stopped near us below one still approaching', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour, maxAlarms: 1 })
+    const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    const north = 50 + 80 / 1852 / 60
+    ev.evaluate(anchored, { [OTHER]: vessel(north, 1, 180, 1) }, SELF, NOW)
+    // It stops, held at warn, while a second boat closes from the south: 90 m
+    // at 1 kn, warn too.
+    const both = {
+      [OTHER]: vessel(north, 1, 180, 0.1),
+      [THIRD]: vessel(50 - 90 / 1852 / 60, 1, 0, 0.51)
+    }
+    ev.evaluate(anchored, both, SELF, NOW + 2000)
+    ev.evaluate(anchored, both, SELF, NOW + 4000)
+    expect(sink.calls.at(-1)).toEqual([THIRD, expect.objectContaining({ level: 'warn' })])
   })
 
   describe('a target crossing our track', () => {
