@@ -16,6 +16,15 @@ describe('computeCpa', () => {
     expect(r.range).toBeCloseTo(2 * 1852, -2)
   })
 
+  it('tells two boats lying still that they keep their distance', () => {
+    const r = computeCpa(
+      { position: { latitude: 50, longitude: 1 }, cog: 0, sog: 0 },
+      { position: { latitude: 50 + 0.05 / 60, longitude: 1 }, cog: 0, sog: 0 }
+    )
+    expect(r).toMatchObject({ tcpa: 0, keepingDistance: true })
+    expect(r.cpa).toBeCloseTo(r.range, 6)
+  })
+
   it('reports the miss distance of a crossing target', () => {
     // Own ship stationary; target 1 NM west of a point 1 NM north,
     // heading east: passes 1 NM north of us.

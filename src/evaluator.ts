@@ -78,6 +78,8 @@ interface Candidate {
   node: TargetNode
   level: AlertLevel
   result: CpaResult
+  /** Seconds to closest approach as judged: past for boats keeping their distance. */
+  tcpa: number
   target: Track
 }
 
@@ -169,6 +171,8 @@ export class Evaluator {
   private slow = false
   private slowTargets = new Set<string>()
   private asternTargets = new Set<string>()
+  /** When each target began keeping its distance, ms since the epoch. */
+  private keepingDistanceSince = new Map<string, number>()
   private readonly raised = new Set<string>()
   private readonly motion = new MotionCheck()
   private readonly drift = new DriftDetector()
@@ -192,6 +196,7 @@ export class Evaluator {
     const ownSlow = this.updateOwnSlow(own)
     const slowTargets = new Set<string>()
     const asternTargets = new Set<string>()
+    const keepingDistanceSince = new Map<string, number>()
     const candidates: Candidate[] = []
     const seen = new Set<string>()
 
@@ -237,12 +242,23 @@ export class Evaluator {
       }
       const current = this.levels.get(targetId)
       const passesWideAstern = astern && current === undefined && result.cpa > innermostCpa(zones)
-      const level = passesWideAstern ? undefined : assess(zones, result.cpa, result.tcpa, current)
+      // Boats keeping their distance are at closest approach for as long as
+      // they do, which would hold a level raised while one of them moved for
+      // good. They count as having passed it when they began, so the level
+      // is held only briefly, through a moment's pause.
+      let tcpa = result.tcpa
+      if (result.keepingDistance) {
+        const since = this.keepingDistanceSince.get(targetId) ?? nowMs
+        keepingDistanceSince.set(targetId, since)
+        tcpa = (since - nowMs) / 1000
+      }
+      const level = passesWideAstern ? undefined : assess(zones, result.cpa, tcpa, current)
       if (level) {
-        candidates.push({ targetId, node, level, result, target })
+        candidates.push({ targetId, node, level, result, tcpa, target })
       }
     }
 
+    this.keepingDistanceSince = keepingDistanceSince
     this.slowTargets = slowTargets
     this.asternTargets = asternTargets
     this.motion.retain(seen)
@@ -273,6 +289,7 @@ export class Evaluator {
     this.levels.clear()
     this.slowTargets.clear()
     this.asternTargets.clear()
+    this.keepingDistanceSince.clear()
     this.raised.clear()
     this.motion.clear()
     this.drift.clear()
@@ -294,13 +311,13 @@ export class Evaluator {
   private compareUrgency(a: Candidate, b: Candidate): number {
     return (
       SEVERITY[b.level] - SEVERITY[a.level] ||
-      Number(a.result.tcpa < 0) - Number(b.result.tcpa < 0) ||
+      Number(a.tcpa < 0) - Number(b.tcpa < 0) ||
       this.rankedTcpa(a) - this.rankedTcpa(b)
     )
   }
 
   private rankedTcpa(c: Candidate): number {
-    return c.result.tcpa - (this.raised.has(c.targetId) ? RAISED_PRIORITY : 0)
+    return c.tcpa - (this.raised.has(c.targetId) ? RAISED_PRIORITY : 0)
   }
 
   private alert(
