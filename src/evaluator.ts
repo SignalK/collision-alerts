@@ -243,7 +243,12 @@ export class Evaluator {
       }
       const current = this.levels.get(targetId)
       const passesWideAstern = astern && current === undefined && result.cpa > innermostCpa(zones)
-      const level = passesWideAstern ? undefined : assess(zones, result.cpa, result.tcpa, current)
+      // Boats keeping their distance are at closest approach for as long as
+      // they do, which would hold a level raised while one of them moved.
+      const level =
+        passesWideAstern || result.keepingDistance
+          ? undefined
+          : assess(zones, result.cpa, result.tcpa, current)
       if (level) {
         candidates.push({ targetId, node, level, result, target })
       }

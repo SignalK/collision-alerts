@@ -111,6 +111,16 @@ describe('Evaluator', () => {
     expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
   })
 
+  it('clears the alarm once a neighbour that closed on us at anchor stops', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour })
+    const anchored = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    const north = 50 + 80 / 1852 / 60
+    ev.evaluate(anchored, { [OTHER]: vessel(north, 1, 180, 1) }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    ev.evaluate(anchored, { [OTHER]: vessel(north, 1, 180, 0.1) }, SELF, NOW)
+    expect(sink.calls.at(-1)).toEqual([OTHER, undefined])
+  })
+
   describe('a target crossing our track', () => {
     // 1 NM west heading east at our speed (5 m/s); it crosses ahead of us
     // when it starts more than 1 NM north, astern when less.

@@ -25,6 +25,11 @@ export interface CpaResult {
   ahead: number
   ownAtCpa: LatLon
   targetAtCpa: LatLon
+  /**
+   * True when the two tracks keep their current separation, both lying still
+   * or moving in company; `tcpa` is then 0 for as long as that lasts.
+   */
+  keepingDistance: boolean
 }
 
 const EARTH_RADIUS = 6371008.8
@@ -54,7 +59,8 @@ export function computeCpa(own: Track, target: Track): CpaResult {
   const vy = target.sog * Math.cos(target.cog) - own.sog * Math.cos(own.cog)
 
   const vSq = vx * vx + vy * vy
-  const tcpa = vSq < MIN_RELATIVE_SPEED_SQ ? 0 : -(rx * vx + ry * vy) / vSq
+  const keepingDistance = vSq < MIN_RELATIVE_SPEED_SQ
+  const tcpa = keepingDistance ? 0 : -(rx * vx + ry * vy) / vSq
   const cx = rx + vx * tcpa
   const cy = ry + vy * tcpa
 
@@ -64,7 +70,8 @@ export function computeCpa(own: Track, target: Track): CpaResult {
     range: Math.hypot(rx, ry),
     ahead: own.sog > 0 ? cx * Math.sin(own.cog) + cy * Math.cos(own.cog) : 0,
     ownAtCpa: advance(own, tcpa),
-    targetAtCpa: advance(target, tcpa)
+    targetAtCpa: advance(target, tcpa),
+    keepingDistance
   }
 }
 
