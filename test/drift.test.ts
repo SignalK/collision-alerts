@@ -81,4 +81,24 @@ describe('DriftDetector', () => {
     }
     expect(track?.sog).toBeCloseTo(84 / 420, 2)
   })
+
+  it('finds a boat dragging after it lay still for a long time', () => {
+    const detector = new DriftDetector()
+    // Still for 15 minutes, then 15 m a minute south.
+    const north = [...Array<number>(16).fill(0), ...[1, 2, 3, 4, 5].map((i) => -15 * i)]
+    const track = north.map((n, i) => detector.apply('a', stopped(n), T0 + i * MINUTE)).at(-1)
+    expect(track?.sog).toBeCloseTo(75 / 300, 2)
+    expect(track?.cog).toBeCloseTo(Math.PI, 2)
+  })
+
+  it('leaves a boat that swung out and back to where it was stopped', () => {
+    const detector = new DriftDetector()
+    let track
+    // 90° round a 60 m rode over 8 minutes, and back over the next 8.
+    for (let i = 0; i <= 16; i++) {
+      const a = ((8 - Math.abs(8 - i)) / 8) * (Math.PI / 2)
+      track = detector.apply('a', stopped(60 * Math.cos(a), 60 * Math.sin(a)), T0 + i * MINUTE)
+      expect(track.sog).toBe(0)
+    }
+  })
 })
