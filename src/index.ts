@@ -6,10 +6,14 @@ import { Evaluator, positionTime, toTrack, type Evaluation, type VesselNode } fr
 import { ConfigSchema, DEFAULTS, type Config } from './config.js'
 import { PRESETS, type Zone } from './zones.js'
 import { targetNodes, type SensorTargetNode } from './targets.js'
+import { inAnyPolygon, quietPolygons, type Polygon } from './regions.js'
 
 const PLUGIN_ID = 'collision-alerts'
 const NM = 1852
 const KNOT = 1852 / 3600
+// Regions change rarely (someone edits them in a chart plotter), so a
+// minute is fresh enough and keeps the resources provider idle.
+const REGIONS_REFRESH_MS = 60_000
 
 // Sensor plugins that raise collision alarms of their own (mayara for radar
 // targets) stand down while this property says so, so a target alarms once.
@@ -36,7 +40,32 @@ function createSink(app: ServerAPI): AlarmSink {
 
 export default function (app: ServerAPI): Plugin {
   let timer: ReturnType<typeof setInterval> | undefined
+  let regionsTimer: ReturnType<typeof setInterval> | undefined
   let evaluator: Evaluator | undefined
+  let quietRegions: Polygon[] = []
+  let regionsError = false
+  // Bumped by stop(), so a read still in flight cannot refill the list.
+  let regionsGeneration = 0
+
+  async function refreshRegions(): Promise<void> {
+    const generation = regionsGeneration
+    try {
+      // A server without a regions provider rejects; that lands in catch.
+      const resources = await app.resourcesApi.listResources('regions', {})
+      if (generation !== regionsGeneration) {
+        return
+      }
+      quietRegions = quietPolygons(resources)
+      regionsError = false
+    } catch (err) {
+      // No provider for regions is normal; report once, not every minute.
+      if (!regionsError) {
+        app.debug(`Could not read regions: ${String(err)}`)
+        regionsError = true
+      }
+      quietRegions = []
+    }
+  }
   // Contexts we published a closest approach on, so stop() can clear them.
   const published = new Set<string>()
 
@@ -99,7 +128,10 @@ export default function (app: ServerAPI): Plugin {
           slowSpeed: config.slowSpeed * KNOT,
           maxAlarms: config.maxAlarms,
           maxRange: config.maxRange * NM,
-          maxAge
+          maxAge,
+          inQuietRegion: config.quietRegions
+            ? (position) => inAnyPolygon(position, quietRegions)
+            : undefined
         },
         createSink(app)
       )
@@ -133,6 +165,10 @@ export default function (app: ServerAPI): Plugin {
           app.error(`Collision evaluation failed: ${String(err)}`)
         }
       }, config.interval * 1000)
+      if (config.quietRegions) {
+        void refreshRegions()
+        regionsTimer = setInterval(() => void refreshRegions(), REGIONS_REFRESH_MS)
+      }
       announce(true)
       app.setPluginStatus('Watching AIS, radar and other targets')
     },
@@ -140,6 +176,10 @@ export default function (app: ServerAPI): Plugin {
     stop() {
       clearInterval(timer)
       timer = undefined
+      clearInterval(regionsTimer)
+      regionsTimer = undefined
+      regionsGeneration++
+      quietRegions = []
       evaluator?.stop()
       evaluator = undefined
       publishClosestApproach([])

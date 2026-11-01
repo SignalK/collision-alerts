@@ -53,6 +53,12 @@ export const ConfigSchema = Type.Object({
     default: 360
   }),
   interval: Type.Number({ title: 'Evaluate every (s)', minimum: 1, default: 2 }),
+  quietRegions: Type.Boolean({
+    title: 'No alarms for stopped boats inside harbour regions',
+    description:
+      'Regions (for example drawn in Freeboard-SK) whose zoneType property is harbour, berth or mooringField. A stopped boat inside one raises nothing; a boat moving or drifting inside one still alarms.',
+    default: true
+  }),
   publishClosestApproach: Type.Boolean({
     title: 'Publish navigation.closestApproach for each target',
     default: true
@@ -71,5 +77,6 @@ export const DEFAULTS: Config = {
   maxRange: 12,
   maxAge: 360,
   interval: 2,
+  quietRegions: true,
   publishClosestApproach: true
 }

@@ -36,6 +36,36 @@ By default, at most three targets alarm at once (**Alarm for at most this many t
 
 An alarm escalates as soon as a target enters a stricter zone, and is held until the target is clearly outside it again, so a CPA hovering on a limit doesn't make the alarm flicker.
 
+## Harbours, berths and mooring fields
+
+Inside a harbour you pass a few metres from moored boats all the time, and an alarm there teaches the crew to ignore it. A stopped boat inside a **region** marked as a harbour, a berth or a mooring field raises nothing; a boat that moves, or is found drifting, inside one still alarms as usual.
+
+Regions are the server's standard `regions` resources, which Freeboard-SK can draw. The plugin reads their `feature.properties.zoneType` and acts on `harbour`, `berth` and `mooringField`:
+
+```json
+{
+  "name": "Home marina",
+  "feature": {
+    "type": "Feature",
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [-8.739, 42.278],
+          [-8.733, 42.278],
+          [-8.733, 42.274],
+          [-8.739, 42.274],
+          [-8.739, 42.278]
+        ]
+      ]
+    },
+    "properties": { "zoneType": "harbour" }
+  }
+}
+```
+
+The list of regions is read once a minute. **No alarms for stopped boats inside harbour regions** turns this off. `zoneType` is proposed as a shared convention so that other plugins and chart plotters can act on the same regions.
+
 ## Radar and other sensors
 
 The plugin also evaluates radar and camera targets that sensor plugins publish as `targets.<type>:<id>` contexts (mayara does this for ARPA targets), so boats without AIS are covered too. When a fusion plugin such as Target Fusion links a target to the AIS vessel it is (`sameAs`), the two are one boat and raise one alarm, not two. Install Target Fusion alongside this plugin if you have radar or a camera (the App Store lists it as recommended); without it a boat seen on both AIS and radar alarms twice. The boat then moves with whichever sensor reported last, so radar keeps tracking it after its AIS falls silent. The alarm points at the AIS vessel when there is one, and otherwise at the target's context (`targets.radar:…`); `data.sources` lists every sensor that sees it.
