@@ -163,3 +163,60 @@ describe('config schema', () => {
     }
   })
 })
+
+describe('plugin with harbour regions', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  // A stopped boat 300 m dead ahead, inside a small harbour region.
+  const ahead = 50 + 300 / 111_195
+  const ring = [
+    [0.99, ahead - 0.001],
+    [1.01, ahead - 0.001],
+    [1.01, ahead + 0.001],
+    [0.99, ahead + 0.001],
+    [0.99, ahead - 0.001]
+  ]
+  function harbourApp() {
+    const fake = fakeApp(true)
+    fake.app.getPath = vi.fn((path: string): unknown =>
+      path === 'vessels'
+        ? { [SELF]: { navigation: nav(50, 0, 5) }, [OTHER]: { navigation: nav(ahead, 0, 0) } }
+        : undefined
+    )
+    const listResources = vi.fn(() =>
+      Promise.resolve({
+        harbour: {
+          name: 'Harbour',
+          feature: {
+            type: 'Feature',
+            geometry: { type: 'Polygon', coordinates: [ring] },
+            properties: { zoneType: 'harbour' }
+          }
+        }
+      })
+    )
+    Object.assign(fake.app, { resourcesApi: { listResources } })
+    return { ...fake, listResources }
+  }
+
+  it('raises nothing for a stopped boat inside a harbour region', async () => {
+    const { app, notifications, listResources } = harbourApp()
+    const plugin = createPlugin(app)
+    plugin.start({}, () => undefined)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(listResources).toHaveBeenCalledWith('regions', {})
+    expect(notifications.raise).not.toHaveBeenCalled()
+    await plugin.stop()
+  })
+
+  it('alarms for it when the setting is off', async () => {
+    const { app, notifications, listResources } = harbourApp()
+    const plugin = createPlugin(app)
+    plugin.start({ quietRegions: false }, () => undefined)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(listResources).not.toHaveBeenCalled()
+    expect(notifications.raise).toHaveBeenCalledOnce()
+    await plugin.stop()
+  })
+})

@@ -403,3 +403,52 @@ describe('Evaluator', () => {
     ])
   })
 })
+
+describe('harbour regions', () => {
+  // 200 m dead ahead of own ship (heading north at 5 m/s).
+  const ahead = 50 + 200 / 111_195
+
+  it('raises nothing for a stopped boat inside one', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour, inQuietRegion: () => true })
+    ev.evaluate(own, { [OTHER]: vessel(ahead, 1, 0, 0) }, SELF, NOW)
+    expect(sink.calls).toEqual([])
+  })
+
+  it('still alarms for the same boat outside any', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour, inQuietRegion: () => false })
+    ev.evaluate(own, { [OTHER]: vessel(ahead, 1, 0, 0) }, SELF, NOW)
+    expect(sink.calls.at(-1)?.[1]?.level).toBe('alarm')
+  })
+
+  it('still alarms for a boat moving inside one', () => {
+    const { sink, ev } = setup({ zones: PRESETS.harbour, inQuietRegion: () => true })
+    ev.evaluate(own, { [OTHER]: vessel(ahead, 1, 180, 2) }, SELF, NOW)
+    expect(sink.calls.at(-1)?.[1]?.level).toBe('alarm')
+  })
+
+  it('still alarms for a boat drifting inside one although it reports being stopped', () => {
+    const { sink, ev } = setup({ inQuietRegion: () => true })
+    const still = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    for (let minute = 0; minute <= 6; minute++) {
+      const time = NOW - (6 - minute) * 60_000
+      const north = 150 - 0.2 * 60 * minute
+      const node = vessel(50 + north / 111_195, 1, 123, 0.05)
+      const nav = defined(node.navigation)
+      for (const field of [nav.position, nav.courseOverGroundTrue, nav.speedOverGround]) {
+        defined(field).timestamp = new Date(time).toISOString()
+      }
+      ev.evaluate(still, { [OTHER]: node }, SELF, time)
+    }
+    expect(sink.calls.at(-1)?.[1]?.level).toBe('warn')
+  })
+
+  it('releases an alarm raised before the boat stopped inside one', () => {
+    let quiet = false
+    const { sink, ev } = setup({ zones: PRESETS.harbour, inQuietRegion: () => quiet })
+    ev.evaluate(own, { [OTHER]: vessel(ahead, 1, 0, 0) }, SELF, NOW)
+    expect(sink.calls.at(-1)?.[1]?.level).toBe('alarm')
+    quiet = true
+    ev.evaluate(own, { [OTHER]: vessel(ahead, 1, 0, 0) }, SELF, NOW + 2000)
+    expect(sink.calls.at(-1)).toEqual([OTHER, undefined])
+  })
+})

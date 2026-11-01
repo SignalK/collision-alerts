@@ -1,4 +1,4 @@
-import { computeCpa, type CpaResult, type Track } from './cpa.js'
+import { computeCpa, type CpaResult, type LatLon, type Track } from './cpa.js'
 import type { AlarmSink, CollisionAlert } from './alarms.js'
 import { DriftDetector } from './drift.js'
 import { MotionCheck } from './motion.js'
@@ -42,6 +42,8 @@ export interface EvaluatorOptions {
   maxRange: number
   /** Data older than this (seconds) is ignored. */
   maxAge: number
+  /** True when a position lies in a harbour, berth or mooring field region. */
+  inQuietRegion?: (position: LatLon) => boolean
 }
 
 export interface Evaluation {
@@ -227,6 +229,12 @@ export class Evaluator {
       // by the slow zones even while own ship is moving. A boat found
       // drifting is moving, whatever it reports.
       const stopped = target === reported && target.sog === 0
+      // Inside a harbour, a berth or a mooring field boats lie still by
+      // design and passing close to them is normal, so a stopped one raises
+      // nothing there. One that moves, or is found drifting, still does.
+      if (stopped && this.options.inQuietRegion?.(target.position)) {
+        continue
+      }
       const zones =
         (ownSlow && targetSlow) || (stopped && this.options.slowSpeed > 0)
           ? this.options.slowZones
