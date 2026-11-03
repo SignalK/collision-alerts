@@ -17,6 +17,10 @@ export interface CpaResult {
   tcpa: number
   /** Current distance between the tracks, metres. */
   range: number
+  /** Speed of the target relative to own ship, m/s. */
+  relativeSpeed: number
+  /** True bearing of the target from own ship now, radians clockwise from north. */
+  bearing: number
   /**
    * How far ahead of own ship, along its course, the target is at closest
    * approach, metres; negative when it passes astern. 0 when own ship is
@@ -68,6 +72,8 @@ export function computeCpa(own: Track, target: Track): CpaResult {
     cpa: Math.hypot(cx, cy),
     tcpa,
     range: Math.hypot(rx, ry),
+    relativeSpeed: Math.sqrt(vSq),
+    bearing: (Math.atan2(rx, ry) + 2 * Math.PI) % (2 * Math.PI),
     ahead: own.sog > 0 ? cx * Math.sin(own.cog) + cy * Math.cos(own.cog) : 0,
     ownAtCpa: advance(own, tcpa),
     targetAtCpa: advance(target, tcpa),

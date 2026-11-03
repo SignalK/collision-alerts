@@ -28,7 +28,7 @@ export const ConfigSchema = Type.Object({
   slowSpeed: Type.Number({
     title: 'Use Harbour limits when both boats are slower than (kn)',
     description:
-      'While you motor slowly through a harbour or anchorage, boats at anchor ahead would otherwise all fall inside the Coastal or Offshore limits. Boats that are stopped get the Harbour limits at any speed of yours. Faster boats keep the normal limits. 0 turns this off.',
+      'A boat gets the Harbour limits while you and it are both slower than this. A boat you overtake with less than this speed between you, coming up on it from more than 22.5° abaft its beam and faster than it along its course, raises only within the Harbour distances, though as early as the normal limits once it has been inside them about 30 s, and at once inside the Harbour alarm limits; it stays overtaken until the speed between you rises half a knot above this or it is too far off for the normal limits to raise anything. Otherwise the boats at anchor you motor past in a harbour, or a boat you overtake 0.2 NM off, would fall inside the Coastal or Offshore limits. Boats that are stopped get the Harbour limits at any speed of yours. Any other boat overtaking you or crossing at a fine angle keeps the normal limits, and a boat already alarmed keeps the strictest limits it was judged by until the alarm clears. 0 turns this off.',
     minimum: 0,
     default: 3
   }),

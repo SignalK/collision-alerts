@@ -14,6 +14,21 @@ describe('computeCpa', () => {
     expect(r.cpa).toBeLessThan(5)
     expect(r.tcpa).toBeCloseTo(360, -1)
     expect(r.range).toBeCloseTo(2 * 1852, -2)
+    expect(r.relativeSpeed).toBeCloseTo(20 * KN, 6)
+  })
+
+  it('gives the true bearing of the target', () => {
+    const own = { position: { latitude: 50, longitude: 1 }, cog: 0, sog: 0 }
+    const at = (dLat: number, dLon: number) =>
+      computeCpa(own, {
+        position: { latitude: 50 + dLat, longitude: 1 + dLon },
+        cog: 0,
+        sog: 0
+      }).bearing
+    expect(at(0.01, 0)).toBeCloseTo(0, 6)
+    expect(at(0, 0.01)).toBeCloseTo(90 * DEG, 6)
+    expect(at(-0.01, 0)).toBeCloseTo(180 * DEG, 6)
+    expect(at(0, -0.01)).toBeCloseTo(270 * DEG, 6)
   })
 
   it('tells two boats lying still that they keep their distance', () => {

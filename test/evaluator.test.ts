@@ -333,6 +333,437 @@ describe('Evaluator', () => {
     })
   })
 
+  describe('a boat we overtake', () => {
+    const COS50 = Math.cos((50 * Math.PI) / 180)
+    // Own ship makes 5 m/s on 000°; the other boat 4 m/s on the same course.
+    const sameCourse = (northM: number, eastM: number, sog = 4, cogDeg = 0) =>
+      vessel(50 + northM / 1852 / 60, 1 + eastM / 1852 / 60 / COS50, cogDeg, sog)
+    // 300 m ahead, 370 m to starboard: CPA 370 m in 5 min, a Coastal alarm.
+    const abeam = (sog?: number) => sameCourse(300, 370, sog)
+    // A boat `rangeM` off on the given true bearing from us.
+    const bearingFrom = (rangeM: number, bearingDeg: number, cogDeg: number, sog: number) => {
+      const b = (bearingDeg * Math.PI) / 180
+      return sameCourse(rangeM * Math.cos(b), rangeM * Math.sin(b), sog, cogDeg)
+    }
+    const stamped = (node: VesselNode, time: number) => {
+      const nav = defined(node.navigation)
+      for (const field of [nav.position, nav.courseOverGroundTrue, nav.speedOverGround]) {
+        defined(field).timestamp = new Date(time).toISOString()
+      }
+      return node
+    }
+    const levels = (sink: RecordingSink) => sink.calls.map(([, alert]) => alert?.level)
+    // Evaluates every 2 s from `from` (ms) for `seconds`, with `node` as it is.
+    const hold = (ev: Evaluator, node: VesselNode, from: number, seconds: number) => {
+      for (let s = 0; s <= seconds; s += 2) {
+        ev.evaluate(own, { [OTHER]: node }, SELF, from + s * 1000)
+      }
+    }
+
+    it('raises nothing when we pass it 370 m off', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      ev.evaluate(own, { [OTHER]: abeam() }, SELF, NOW)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('keeps the normal limits when Harbour limits are turned off', () => {
+      const { sink, ev } = setup()
+      ev.evaluate(own, { [OTHER]: abeam() }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('warns as early as the normal limits when it is right on our track, after 30 s', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 600 m dead ahead: CPA 0 in 10 min, outside the Harbour limits' 5 min.
+      hold(ev, sameCourse(600, 0), NOW, 28)
+      expect(sink.calls).toEqual([])
+      ev.evaluate(own, { [OTHER]: sameCourse(600, 0) }, SELF, NOW + 30_000)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
+    it('warns but does not alarm for a pass 80 m off, and holds the warning', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 300 m ahead, 80 m to starboard: CPA 80 m in 5 min, a Coastal alarm,
+      // but outside the Harbour alarm distance of 50 m.
+      hold(ev, sameCourse(300, 80), NOW, 40)
+      expect(levels(sink)).toEqual(['warn', 'warn', 'warn', 'warn', 'warn', 'warn'])
+    })
+
+    it('escalates a raised level at once', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      hold(ev, sameCourse(300, 80), NOW, 30)
+      // Now 300 m dead ahead: CPA 0 in 5 min, inside the alarm zone.
+      ev.evaluate(own, { [OTHER]: sameCourse(300, 0) }, SELF, NOW + 32_000)
+      expect(levels(sink)).toEqual(['warn', 'alarm'])
+    })
+
+    it('rides out moments outside the zone, as between two reports', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // Of every five evaluations, one sees CPA 150 m, outside the zone.
+      for (let s = 0; s <= 60; s += 2) {
+        const node = s % 10 === 8 ? sameCourse(600, 150) : sameCourse(600, 0)
+        ev.evaluate(own, { [OTHER]: node }, SELF, NOW + s * 1000)
+      }
+      expect(levels(sink)).toContain('warn')
+    })
+
+    it('counts a moment outside as a third of one inside', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // Of every five evaluations, two in a row see CPA 0: in the zone 4 s,
+      // out of it 6 s, so 2 s more in every 10 s.
+      let raisedAt: number | undefined
+      for (let s = 0; s <= 300 && raisedAt === undefined; s += 2) {
+        const node = s % 10 < 4 ? sameCourse(600, 0) : sameCourse(600, 150)
+        ev.evaluate(own, { [OTHER]: node }, SELF, NOW + s * 1000)
+        if (sink.calls.length > 0) {
+          raisedAt = s
+        }
+      }
+      expect(raisedAt).toBeGreaterThanOrEqual(140)
+      expect(raisedAt).toBeLessThanOrEqual(160)
+    })
+
+    it('ignores brief moments in the zone, as from speed noise', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // Of every ten evaluations, two in a row see CPA 0, inside the zone.
+      for (let s = 0; s <= 300; s += 2) {
+        const node = s % 20 < 4 ? sameCourse(600, 0) : sameCourse(600, 150)
+        ev.evaluate(own, { [OTHER]: node }, SELF, NOW + s * 1000)
+      }
+      expect(sink.calls).toEqual([])
+    })
+
+    it('alarms at once inside the Harbour alarm limits only', () => {
+      // 250 m ahead, 80 m to starboard: CPA 80 m in 250 s, a Harbour warning.
+      const warn = setup({ slowSpeed: 1.5 })
+      warn.ev.evaluate(own, { [OTHER]: sameCourse(250, 80) }, SELF, NOW)
+      expect(warn.sink.calls).toEqual([])
+      // 100 m dead ahead: CPA 0 in 100 s, a Harbour alarm.
+      const alarm = setup({ slowSpeed: 1.5 })
+      alarm.ev.evaluate(own, { [OTHER]: sameCourse(100, 0) }, SELF, NOW)
+      expect(alarm.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('does not count time passing wide astern', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      ev.evaluate(own, { [OTHER]: abeam() }, SELF, NOW)
+      // 300 m to starboard, 80 m astern, closing on our wake at 0.75 m/s:
+      // CPA 80 m astern in 400 s, outside the 50 m that a boat passing astern
+      // must come within to raise anything.
+      const astern = (aftM: number) =>
+        vessel(
+          50 - aftM / 1852 / 60,
+          1 + 300 / 1852 / 60 / COS50,
+          (Math.atan2(-0.75, 5) * 180) / Math.PI,
+          Math.hypot(0.75, 5)
+        )
+      hold(ev, astern(80), NOW + 2000, 28)
+      expect(sink.calls).toEqual([])
+      // Now CPA 40 m astern in 400 s: inside, but only from now on.
+      ev.evaluate(own, { [OTHER]: astern(40) }, SELF, NOW + 32_000)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('counts the time in the zone again after a level clears', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      hold(ev, sameCourse(600, 0), NOW, 30)
+      // CPA 150 m: the warning clears.
+      ev.evaluate(own, { [OTHER]: sameCourse(600, 150) }, SELF, NOW + 32_000)
+      expect(levels(sink)).toEqual(['warn', undefined])
+      hold(ev, sameCourse(600, 0), NOW + 34_000, 20)
+      expect(levels(sink)).toEqual(['warn', undefined])
+    })
+
+    it('takes the normal limits at once when no longer overtaken', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      hold(ev, sameCourse(300, 80), NOW, 30)
+      // It slows to 3 m/s, 2 m/s between us: CPA 80 m in 2.5 min, a Coastal alarm.
+      ev.evaluate(own, { [OTHER]: sameCourse(300, 80, 3) }, SELF, NOW + 32_000)
+      expect(levels(sink).at(-1)).toBe('alarm')
+    })
+
+    it('cuts the distance of every level, an emergency too', () => {
+      const zones = [...PRESETS.coastal, { level: 'emergency' as const, cpa: 200, tcpa: 300 }]
+      const { sink, ev } = setup({ slowSpeed: 1.5, zones })
+      // 250 m ahead, 80 m to starboard: CPA 80 m in 250 s, inside the
+      // emergency zone as set, outside it cut to 50 m.
+      hold(ev, sameCourse(250, 80), NOW, 30)
+      expect(levels(sink)).toEqual(['warn'])
+    })
+
+    it('counts the time that passes, not the evaluations', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      for (let s = 0; s <= 30; s += 5) {
+        ev.evaluate(own, { [OTHER]: sameCourse(600, 0) }, SELF, NOW + s * 1000)
+      }
+      expect(levels(sink)).toEqual(['warn'])
+    })
+
+    it('keeps its time in the zone through a report without a course', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      hold(ev, sameCourse(600, 0), NOW, 20)
+      const noCourse = sameCourse(600, 0)
+      delete defined(noCourse.navigation).courseOverGroundTrue
+      ev.evaluate(own, { [OTHER]: noCourse }, SELF, NOW + 22_000)
+      hold(ev, sameCourse(600, 0), NOW + 24_000, 6)
+      expect(levels(sink)).toEqual(['warn'])
+    })
+
+    it('ignores the clock going back', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      ev.evaluate(own, { [OTHER]: sameCourse(600, 150) }, SELF, NOW)
+      ev.evaluate(own, { [OTHER]: sameCourse(600, 150) }, SELF, NOW - 120_000)
+      ev.evaluate(own, { [OTHER]: sameCourse(600, 0) }, SELF, NOW - 118_000)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('counts a gap in the data as no more than 10 s in the zone', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      for (let s = 0; s <= 120; s += 60) {
+        ev.evaluate(own, { [OTHER]: sameCourse(600, 0) }, SELF, NOW + s * 1000)
+      }
+      expect(sink.calls).toEqual([])
+    })
+
+    it('counts from nothing after a long time outside the zone', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 10 min at CPA 150 m, then CPA 0 for 30 s.
+      for (let s = 0; s <= 630; s += 2) {
+        const time = NOW + s * 1000
+        const node = s <= 600 ? sameCourse(600, 150) : sameCourse(600, 0)
+        ev.evaluate(own, { [OTHER]: stamped(node, time) }, SELF, time)
+      }
+      expect(levels(sink)).toEqual(['warn'])
+    })
+
+    it('warns as early as the normal limits when it turns into us', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 392 m ahead, 699 m to starboard, on our course: overtaken.
+      ev.evaluate(own, { [OTHER]: sameCourse(392, 699) }, SELF, NOW)
+      expect(sink.calls).toEqual([])
+      // It turns to 345° at 4.5 m/s: still slow between us, but a collision
+      // course, CPA 0 in 10 min, warned 30 s on.
+      hold(ev, sameCourse(392, 699, 4.5, 345), NOW + 2000, 26)
+      expect(sink.calls).toEqual([])
+      ev.evaluate(own, { [OTHER]: sameCourse(392, 699, 4.5, 345) }, SELF, NOW + 30_000)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
+    it('counts as overtaken on our port side, across north', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 400 m off on 350°, sailing 010° at 4 m/s: CPA 158 m in 4.8 min, a
+      // Coastal alarm.
+      ev.evaluate(own, { [OTHER]: bearingFrom(400, 350, 10, 4) }, SELF, NOW)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('counts as overtaken only from more than 22.5° abaft its beam', () => {
+      // 600 m off, on our course: its course 66° off the line from us to it,
+      // then 69°. Both are Coastal warnings, passing over 500 m off.
+      const within = setup({ slowSpeed: 1.5 })
+      within.ev.evaluate(own, { [OTHER]: bearingFrom(600, 66, 0, 4) }, SELF, NOW)
+      expect(within.sink.calls).toEqual([])
+      const outside = setup({ slowSpeed: 1.5 })
+      outside.ev.evaluate(own, { [OTHER]: bearingFrom(600, 69, 0, 4) }, SELF, NOW)
+      expect(outside.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
+    it('stays overtaken as we draw abeam and pass', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // From 600 m ahead, 300 m to starboard, we gain 1 m/s on it. Once it
+      // is less than 124 m ahead we no longer come up on it from abaft its
+      // beam, and at 100 m ahead the Coastal limits would alarm (CPA 300 m in
+      // 100 s).
+      for (let s = 0; s <= 700; s += 20) {
+        const time = NOW + s * 1000
+        ev.evaluate(own, { [OTHER]: stamped(sameCourse(600 - s, 300), time) }, SELF, time)
+      }
+      expect(sink.calls).toEqual([])
+    })
+
+    it('stays overtaken through a moment without own data', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      ev.evaluate(own, { [OTHER]: abeam() }, SELF, NOW)
+      ev.evaluate(null, { [OTHER]: abeam() }, SELF, NOW + 2000)
+      // Nearly abeam, 30 m ahead and 300 m to starboard: CPA 300 m in 30 s, a
+      // Coastal alarm, and too far abeam to count as overtaken anew.
+      ev.evaluate(own, { [OTHER]: sameCourse(30, 300) }, SELF, NOW + 4000)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('stays overtaken should it come up on us again slowly', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // We pass it 300 m off and sail on until it is 400 m astern.
+      for (let s = 0; s <= 1000; s += 20) {
+        const time = NOW + s * 1000
+        ev.evaluate(own, { [OTHER]: stamped(sameCourse(600 - s, 300), time) }, SELF, time)
+      }
+      // Then it comes up on us from astern, 0.3 m/s faster: 100 m astern,
+      // 200 m to starboard, CPA 200 m in 5.6 min, a Coastal alarm.
+      const time = NOW + 1020_000
+      ev.evaluate(own, { [OTHER]: stamped(sameCourse(-100, 200, 5.3), time) }, SELF, time)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('stays overtaken when our wind drops, until it is clearly faster', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      ev.evaluate(own, { [OTHER]: abeam() }, SELF, NOW)
+      // We have drawn abeam, 300 m off on 100°, when our wind drops to 3 m/s.
+      const becalmed = defined(toTrack(vessel(50, 1, 0, 3), NOW, 360))
+      // At 3.3 and then 4.5 m/s it gains on us, 1.5 m/s at most: still
+      // overtaken, though CPA 296 m within 3 min is a Coastal alarm.
+      ev.evaluate(becalmed, { [OTHER]: bearingFrom(300, 100, 0, 3.3) }, SELF, NOW + 2000)
+      ev.evaluate(becalmed, { [OTHER]: bearingFrom(300, 100, 0, 4.5) }, SELF, NOW + 4000)
+      expect(sink.calls).toEqual([])
+      // At 5 m/s, 2 m/s between us, it is overtaking us: the Coastal limits.
+      ev.evaluate(becalmed, { [OTHER]: bearingFrom(300, 100, 0, 5) }, SELF, NOW + 6000)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('is let go once too far off for the normal limits to raise it', () => {
+      // The zones listed strictest first, so the farthest-reaching is not the
+      // first.
+      const zones = [...PRESETS.coastal].reverse()
+      // Later we meet it again 400 m off on 030°, sailing 345° at 4.9 m/s and
+      // converging: CPA 298 m in 3.4 min, a Coastal alarm. We don't gain on
+      // it along its course, so it is not overtaken anew.
+      const again = bearingFrom(400, 30, 345, 4.9)
+      // 2100 m astern, within the 2186 m at which the Coastal limits could
+      // still raise a boat 1.75 m/s from us: still overtaken.
+      const near = setup({ slowSpeed: 1.5, zones })
+      near.ev.evaluate(own, { [OTHER]: abeam() }, SELF, NOW)
+      near.ev.evaluate(own, { [OTHER]: bearingFrom(2100, 180, 0, 4) }, SELF, NOW + 2000)
+      near.ev.evaluate(own, { [OTHER]: again }, SELF, NOW + 4000)
+      expect(near.sink.calls).toEqual([])
+      // 2300 m astern: let go.
+      const far = setup({ slowSpeed: 1.5, zones })
+      far.ev.evaluate(own, { [OTHER]: abeam() }, SELF, NOW)
+      far.ev.evaluate(own, { [OTHER]: bearingFrom(2300, 180, 0, 4) }, SELF, NOW + 2000)
+      far.ev.evaluate(own, { [OTHER]: again }, SELF, NOW + 4000)
+      expect(far.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('stays overtaken until the speed between us is clearly above the threshold', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      ev.evaluate(own, { [OTHER]: abeam() }, SELF, NOW)
+      // 1.6 m/s between us, just above the threshold: still overtaken.
+      ev.evaluate(own, { [OTHER]: abeam(3.4) }, SELF, NOW)
+      expect(sink.calls).toEqual([])
+      ev.evaluate(own, { [OTHER]: abeam(3) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('keeps an alarm raised under the normal limits until it clears', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 1.6 m/s between us, within the margin but not yet below the threshold:
+      // the normal limits, and an alarm.
+      ev.evaluate(own, { [OTHER]: abeam(3.4) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+      // Speed noise takes it below the threshold and back: the alarm stands.
+      ev.evaluate(own, { [OTHER]: abeam(3.6) }, SELF, NOW + 2000)
+      ev.evaluate(own, { [OTHER]: abeam(3.4) }, SELF, NOW + 4000)
+      expect(levels(sink)).toEqual(['alarm', 'alarm', 'alarm'])
+    })
+
+    it('becomes overtaken while an alarm raised under the normal limits stands', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      ev.evaluate(own, { [OTHER]: abeam(3.4) }, SELF, NOW)
+      // Below the threshold it is overtaken, though the alarm stands.
+      ev.evaluate(own, { [OTHER]: abeam(3.6) }, SELF, NOW + 2000)
+      // 400 m astern, 300 m to starboard: past, and the alarm clears.
+      ev.evaluate(own, { [OTHER]: sameCourse(-400, 300) }, SELF, NOW + 4000)
+      // It comes up on us again, 0.3 m/s faster: 100 m astern, 300 m to
+      // starboard, CPA 300 m in 5.6 min, a Coastal alarm.
+      ev.evaluate(own, { [OTHER]: sameCourse(-100, 300, 5.3) }, SELF, NOW + 6000)
+      expect(levels(sink)).toEqual(['alarm', 'alarm', undefined])
+    })
+
+    it('keeps an alarm raised under the normal limits when we slow down', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // A boat 0.2 NM ahead, 150 m to starboard of our track, coming our way
+      // at 0.6 m/s: CPA 150 m within 3 min, a Coastal alarm, nothing in Harbour.
+      const target = vessel(50 + 0.2 / 60, 1 + 150 / 1852 / 60 / COS50, 180, 0.6)
+      const at = (sog: number) => defined(toTrack(vessel(50, 1, 0, sog), NOW, 360))
+      ev.evaluate(at(2), { [OTHER]: target }, SELF, NOW)
+      // We slow below the threshold: both boats slow, but the alarm stands.
+      ev.evaluate(at(1.4), { [OTHER]: target }, SELF, NOW + 2000)
+      ev.evaluate(at(2), { [OTHER]: target }, SELF, NOW + 4000)
+      expect(levels(sink)).toEqual(['alarm', 'alarm', 'alarm'])
+    })
+
+    it('counts as overtaken though the normal limits judged it before', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 1500 m ahead, 80 m to starboard, gaining 2 m/s: the normal limits, but
+      // CPA is 12.5 min away.
+      ev.evaluate(own, { [OTHER]: sameCourse(1500, 80, 3) }, SELF, NOW)
+      // It slows our gain to 1 m/s, 300 m ahead: CPA 80 m in 5 min, a Coastal
+      // alarm, a warning when overtaken.
+      hold(ev, sameCourse(300, 80), NOW + 2000, 32)
+      expect(levels(sink)).toEqual(['warn', 'warn'])
+    })
+
+    it('keeps the Harbour limits when both boats are slow', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // We make 1.4 m/s; 100 m dead ahead it makes 0.9 m/s on our course: CPA
+      // 0 in 200 s, a Harbour warning, an alarm by the normal limits' timing.
+      const slowOwn = defined(toTrack(vessel(50, 1, 0, 1.4), NOW, 360))
+      ev.evaluate(slowOwn, { [OTHER]: sameCourse(100, 0, 0.9) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
+    it('keeps the normal limits for a boat ahead we gain on fast at an angle', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 400 m off on 010°, sailing 025° at 3.6 m/s: we come up on it from
+      // abaft its beam and gain 0.9 m/s on it along its course, but the speed
+      // between us is 2.3 m/s. CPA 312 m in 109 s.
+      ev.evaluate(own, { [OTHER]: bearingFrom(400, 10, 25, 3.6) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+  })
+
+  describe('a boat closing slowly that we do not overtake', () => {
+    const COS50 = Math.cos((50 * Math.PI) / 180)
+    const at = (northM: number, eastM: number, cogDeg: number, sog: number) =>
+      vessel(50 + northM / 1852 / 60, 1 + eastM / 1852 / 60 / COS50, cogDeg, sog)
+    const bearingFrom = (rangeM: number, bearingDeg: number, cogDeg: number, sog: number) => {
+      const b = (bearingDeg * Math.PI) / 180
+      return at(rangeM * Math.cos(b), rangeM * Math.sin(b), cogDeg, sog)
+    }
+
+    it('keeps the normal limits when it crosses at a fine angle', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // On 345° at our speed, 388 m to starboard and 51 m ahead: a collision
+      // course 15° off ours, 1.3 m/s between us. CPA 0 in 5 min.
+      ev.evaluate(own, { [OTHER]: at(51, 388, 345, 5) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('keeps the normal limits when it converges at a fine angle and we do not gain on it', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 400 m off on 030°, sailing 345° at 4.9 m/s: we come up on it from
+      // abaft its beam and are faster, but not along its course. CPA 298 m
+      // in 3.4 min.
+      ev.evaluate(own, { [OTHER]: bearingFrom(400, 30, 345, 4.9) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('keeps the normal limits when it crosses ahead of us at a fine angle', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 700 m off on 055°, sailing 345° at 4.6 m/s: ahead of us and slower,
+      // but its course is 70° off the line from us to it. CPA 121 m in 8.8 min.
+      ev.evaluate(own, { [OTHER]: bearingFrom(700, 55, 345, 4.6) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
+    it('keeps the normal limits when it overtakes us', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 400 m astern, 60 m to starboard, 1.2 m/s faster on our course: CPA
+      // 60 m in 5.6 min.
+      ev.evaluate(own, { [OTHER]: at(-400, 60, 0, 6.2) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+  })
+
   it('keeps the normal zones for a fast target while own ship is slow', () => {
     const { sink, ev } = setup({ slowSpeed: 1.5 })
     const slowOwn = defined(toTrack(vessel(50, 1, 0, 1), NOW, 360))
