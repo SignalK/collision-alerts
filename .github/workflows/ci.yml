@@ -11,6 +11,8 @@ jobs:
   test:
     uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@master
     with:
+      # Node 24 is the lowest supported (engines), 26 the newest.
+      node-versions: '["24", "26"]'
       enable-signalk-integration: true
       format-check-command: npm run ci-lint
 

@@ -8,7 +8,7 @@ updates:
       minor-and-patch:
         update-types: [minor, patch]
     ignore:
-      # @types/node tracks the lowest supported Node major (engines: >=22).
+      # @types/node tracks the lowest supported Node major (engines: >=24).
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
 
