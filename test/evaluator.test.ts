@@ -442,6 +442,14 @@ describe('Evaluator', () => {
       const alarm = setup({ slowSpeed: 1.5 })
       alarm.ev.evaluate(own, { [OTHER]: sameCourse(100, 0) }, SELF, NOW)
       expect(alarm.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+      // 130 m ahead, 30 m to starboard: CPA 30 m, but in 130 s.
+      const later = setup({ slowSpeed: 1.5 })
+      later.ev.evaluate(own, { [OTHER]: sameCourse(130, 30) }, SELF, NOW)
+      expect(later.sink.calls).toEqual([])
+      // 100 m ahead, 60 m to starboard: in 100 s, but CPA 60 m.
+      const wider = setup({ slowSpeed: 1.5 })
+      wider.ev.evaluate(own, { [OTHER]: sameCourse(100, 60) }, SELF, NOW)
+      expect(wider.sink.calls).toEqual([])
     })
 
     it('does not count time passing wide astern', () => {

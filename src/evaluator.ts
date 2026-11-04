@@ -365,7 +365,7 @@ export class Evaluator {
         overtakenInZone.set(targetId, { net, at: nowMs })
         if (
           net < OVERTAKEN_RAISE_DELAY &&
-          (!level || assess(this.overtakenAtOnceZones, result.cpa, tcpa, undefined) === undefined)
+          assess(this.overtakenAtOnceZones, result.cpa, tcpa, undefined) === undefined
         ) {
           level = undefined
         }
