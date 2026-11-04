@@ -27,13 +27,17 @@
   "signalk": {
     "displayName": "Collision Alerts",
     "appIcon": "./icon.svg",
+    "screenshots": [
+      "./docs/screenshots/cpa-alarm.png"
+    ],
     "recommends": [
       "signalk-target-fusion"
     ]
   },
   "files": [
     "plugin/**/*",
-    "icon.svg"
+    "icon.svg",
+    "docs/screenshots/*.png"
   ],
   "engines": {
     "node": ">=24",
