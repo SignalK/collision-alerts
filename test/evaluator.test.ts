@@ -548,10 +548,12 @@ describe('Evaluator', () => {
       const under = setup({ slowSpeed: 1.5 })
       under.ev.evaluate(stopped, { [OTHER]: southbound(90, 130, 3) }, SELF, NOW)
       expect(under.sink.calls).toEqual([])
-      // At 3.2 m/s, above 6 kn, it alarms.
-      const over = setup({ slowSpeed: 1.5 })
-      over.ev.evaluate(stopped, { [OTHER]: southbound(96, 130, 3.2) }, SELF, NOW)
-      expect(over.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+      // At 3.2 m/s, above 6 kn, it alarms, and at 3.088 m/s, just above.
+      for (const sog of [3.2, 3.088]) {
+        const over = setup({ slowSpeed: 1.5 })
+        over.ev.evaluate(stopped, { [OTHER]: southbound(30 * sog, 130, sog) }, SELF, NOW)
+        expect(over.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+      }
     })
 
     it('keeps the 30 s count for a boat we were overtaking', () => {
