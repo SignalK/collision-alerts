@@ -34,7 +34,7 @@ The plugin tries to alarm only when it matters:
 - **Overtaking.** A boat you slowly overtake raises only if it will pass within 100 m. One that turns into you still warns in good time.
 - **Boats crossing behind you.** While you are under way, a boat that will cross your wake raises nothing, unless it will come within the alarm distance.
 - **Between AIS reports.** Small boats report only every 30 s. In between, each boat is judged where it is by now, carried on along its course for up to a minute.
-- **Busy waters.** At most 3 boats warn or alarm at once, the most urgent first. A warning that had to make room for a more urgent boat stays quiet for 2 minutes, unless it gets worse.
+- **Busy waters.** At most 3 boats warn or alarm at once, the most urgent first. A warning that had to make room for a more urgent boat stays quiet for 2 minutes, unless it gets worse or clears the limits and comes back.
 - **No flicker.** An alarm stays on until the boat is clearly outside the limits again.
 
 The 3 kn is the setting **Use Harbour limits when both boats are slower than**. Set it to 0 to turn off the harbour, berth, stopped-boat and overtaking rules above, so every boat gets your chosen limits. Boats crossing your wake still stay quiet. The 3 boats are the setting **Alarm for at most this many targets at once**.
