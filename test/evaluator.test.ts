@@ -1238,6 +1238,99 @@ describe('Evaluator', () => {
     expect(sink.calls).toContainEqual([OTHER, undefined])
   })
 
+  describe('a target pushed out at the cap', () => {
+    const COS50 = Math.cos((50 * Math.PI) / 180)
+    // `northNm` north, passing `eastNm` abeam, closing at 10 m/s with us.
+    const at = (northNm: number, eastNm: number) =>
+      vessel(50 + northNm / 60, 1 + eastNm / 60 / COS50, 180, 5)
+    // A warning: CPA 0.4 NM in 93 s.
+    const passing = at(0.5, 0.4)
+    // An alarm: CPA 0 in 185 s.
+    const headOn = at(1, 0)
+    // In no zone: CPA 2 NM.
+    const wide = at(3, 2)
+    const pushedOut = () => {
+      const { sink, ev } = setup({ maxAlarms: 1 })
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW)
+      ev.evaluate(own, { [OTHER]: passing, [THIRD]: headOn }, SELF, NOW + 2000)
+      sink.calls = []
+      return { sink, ev }
+    }
+
+    it('is held back for two minutes as a warning, the place free or not', () => {
+      const { sink, ev } = pushedOut()
+      // The head-on boat is gone, which frees the place.
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 4000)
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 120_000)
+      expect(sink.calls).toEqual([[THIRD, undefined]])
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 122_000)
+      expect(sink.calls.at(-1)).toEqual([OTHER, expect.objectContaining({ level: 'warn' })])
+    })
+
+    it('is raised at once at a higher level, and stays raised when it drops back', () => {
+      const { sink, ev } = pushedOut()
+      // It turns towards us as the head-on boat goes.
+      ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 4000)
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 6000)
+      expect(sink.calls).toEqual([
+        [THIRD, undefined],
+        [OTHER, expect.objectContaining({ level: 'alarm' })],
+        [OTHER, expect.objectContaining({ level: 'warn' })]
+      ])
+    })
+
+    it('is never held back as an alarm', () => {
+      const { sink, ev } = setup({ maxAlarms: 1 })
+      ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+      // Head-on from 0.3 NM, closest approach 2 min sooner: it takes the place.
+      ev.evaluate(own, { [OTHER]: headOn, [FOURTH]: at(0.3, 0) }, SELF, NOW + 2000)
+      sink.calls = []
+      ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 4000)
+      expect(sink.calls).toEqual([
+        [FOURTH, undefined],
+        [OTHER, expect.objectContaining({ level: 'alarm' })]
+      ])
+    })
+
+    it('is raised at once once it has left every zone in between', () => {
+      const { sink, ev } = pushedOut()
+      ev.evaluate(own, { [OTHER]: wide, [THIRD]: headOn }, SELF, NOW + 4000)
+      sink.calls = []
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 6000)
+      expect(sink.calls).toEqual([
+        [THIRD, undefined],
+        [OTHER, expect.objectContaining({ level: 'warn' })]
+      ])
+    })
+
+    it('is let go when the clock goes back, and on stop', () => {
+      const back = pushedOut()
+      back.ev.evaluate(own, { [OTHER]: passing }, SELF, NOW - 60_000)
+      expect(back.sink.calls.at(-1)).toEqual([OTHER, expect.objectContaining({ level: 'warn' })])
+      const stopped = pushedOut()
+      stopped.ev.stop()
+      stopped.sink.calls = []
+      stopped.ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 4000)
+      expect(stopped.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
+    it('leaves the others at a larger cap alone', () => {
+      const { sink, ev } = setup({ maxAlarms: 2 })
+      const sooner = at(0.5, 0.4)
+      // CPA 0.4 NM in 148 s: the later of the two warnings.
+      const later = at(0.8, 0.4)
+      ev.evaluate(own, { [OTHER]: sooner, [THIRD]: later }, SELF, NOW)
+      ev.evaluate(own, { [OTHER]: sooner, [THIRD]: later, [FOURTH]: headOn }, SELF, NOW + 2000)
+      expect(sink.calls).toContainEqual([THIRD, undefined])
+      sink.calls = []
+      ev.evaluate(own, { [OTHER]: sooner, [THIRD]: later }, SELF, NOW + 4000)
+      expect(sink.calls).toEqual([
+        [FOURTH, undefined],
+        [OTHER, expect.objectContaining({ level: 'warn' })]
+      ])
+    })
+  })
+
   it('keeps an alarmed target over a slightly more urgent newcomer', () => {
     const { sink, ev } = setup({ maxAlarms: 1 })
     const first = vessel(50 + 0.6 / 60, 1, 180, 5)
