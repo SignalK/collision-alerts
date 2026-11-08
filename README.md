@@ -1,52 +1,48 @@
 # Signal K Collision Alerts
 
-Warns you when another vessel is on course to pass too close. For every AIS target in range (and every radar or camera target, on servers that merge them) the plugin works out the closest point of approach (CPA) and the time until it (TCPA), and raises a Signal K alarm when both fall inside your chosen limits. Chart plotters such as Freeboard-SK show the alarm, sound it, and let you acknowledge or silence it.
+Warns you when another boat is on course to pass too close.
 
-## Setup
+The plugin watches every AIS target around you, and radar or camera targets too. For each boat it works out how close it will pass and how soon. If a boat will come too close too soon, the plugin raises an alarm. Chart plotters such as Freeboard-SK show and sound it, and you can acknowledge or silence it from any app.
 
-Install **@signalk/collision-alerts** from the App Store.
+## Getting started
 
-If you have the older `signalk-collision-alerts` package installed, uninstall it: it is no longer updated, and running both raises every alarm twice. Settings do not carry over, so set the alert sensitivity again in the new plugin's settings.
+Install **Collision Alerts** from the App Store. It starts by itself with the Coastal limits. If it shows as off, enable it in its settings.
 
-A new installation starts on its own with the Coastal sensitivity; an installation you disabled earlier stays off until you enable it in its settings. To change the sensitivity, pick an **Alert sensitivity** there:
+- **Using SK Derived Data for CPA?** Turn its CPA calculation off, or every alarm comes twice.
+- **Had the older `signalk-collision-alerts` plugin?** Uninstall it, or every alarm comes twice. Its settings don't carry over.
+- **Have radar or a camera?** Also install **Target Fusion** from the App Store. A boat seen on both AIS and radar then raises one alarm, not two.
 
-| Sensitivity       | Warn                       | Alarm                      |
-| ----------------- | -------------------------- | -------------------------- |
-| Harbour           | CPA ≤ 100 m within 5 min   | CPA ≤ 50 m within 2 min    |
-| Coastal (default) | CPA ≤ 0.5 NM within 12 min | CPA ≤ 0.25 NM within 6 min |
-| Offshore          | CPA ≤ 1 NM within 20 min   | CPA ≤ 0.5 NM within 10 min |
-| Custom            | your own list of zones     |                            |
+## Choosing your limits
 
-If you used the CPA calculation in **SK Derived Data**, turn it off there so you don't get every alarm twice.
+Pick an **Alert sensitivity** in the plugin settings:
 
-## What it publishes
+| Sensitivity       | Warning if it will pass within | Alarm if it will pass within |
+| ----------------- | ------------------------------ | ---------------------------- |
+| Harbour           | 100 m in the next 5 min        | 50 m in the next 2 min       |
+| Coastal (default) | 0.5 NM in the next 12 min      | 0.25 NM in the next 6 min    |
+| Offshore          | 1 NM in the next 20 min        | 0.5 NM in the next 10 min    |
+| Custom            | your own limits                |                              |
 
-- `notifications.navigation.closestApproach.<target id>` on own vessel, one alarm per target, through the server's Notifications API so acknowledge and silence work from any app. The alarm's `data` carries `targetRef` (the target's Signal K context, e.g. `vessels.urn:mrn:imo:mmsi:244123456`), `source`, `cpa` (m), `tcpa` (s), `range` (m), the target's `targetCog` (rad, `null` when it is stopped) and `targetSog` (m/s), and `cpaPositions`.
-- `vessels.<target id>.navigation.closestApproach` `{distance, timeTo}` for each target in range (can be turned off).
+## What to expect
 
-While you and another boat are both slower than 3 kn (**Use Harbour limits when both boats are slower than**), that boat is judged by the Harbour limits, so the boats at anchor you motor past on arrival don't alarm. A boat you overtake while the two of you move relative to each other slower than 3 kn, coming up on it from more than 22.5° abaft its beam (COLREG rule 13) and faster than it along its course, raises only for a closest approach within the Harbour distances, a warning within 100 m and an alarm within 50 m, though nearly as early as your chosen limits would: overtaking it 0.2 NM off raises nothing, while one that turns into you, or that you are about to run down, warns in good time. It must first spend about 30 s inside a zone, brief moments outside aside, or longer with noisy or infrequent reports; that keeps the moments its closest approach wanders onto your track with speed noise from raising anything. Only inside the Harbour alarm limits, 50 m within 2 minutes, does it raise at once. It stays overtaken however the bearing changes as you draw abeam and pass, and even should it gain on you again, say a motorboat once your wind drops, until the speed between you rises above 3.5 kn, it is too far off for your chosen limits to raise anything at that speed, or the plugin has had no usable data on it or on your boat for more than a minute (a boat that falls silent counts as there until its data are older than **Ignore target data older than**): two boats abreast at nearly the same speed have a closest approach that wanders back and forth with speed noise, which your chosen limits would keep alarming for. Any other boat overtaking you, one crossing your course at a fine angle, or one you don't gain on keeps your chosen limits however slowly it closes, unless you are both slower than 3 kn or you are stopped (below). A boat that is stopped is judged by the Harbour limits at any speed of yours: it can only be hit by steering into it, so passing an anchorage half a mile off raises nothing, while heading straight for an anchored boat still does. A boat found dragging its anchor does not count as stopped. While your own boat is stopped, at a berth or at anchor, a boat faster than this setting (3 kn by default) but slower than 6 kn raises only for a closest approach within the Harbour distances, a warning within 100 m and an alarm within 50 m, though as early as your chosen limits would: a boat leaving the harbour more than 100 m past your berth raises nothing, while one heading straight for you still warns in good time. A faster boat keeps your chosen limits: still far off when their time comes, a degree or two of error in its reported course would move its closest approach beyond those distances. Your boat found drifting does not count as stopped. A boat already alarmed keeps the strictest limits it was judged by until the alarm clears, so speed noise near 3 kn doesn't clear the alarm and raise it again. Set it to 0 to turn this off.
+The plugin tries to alarm only when it matters:
 
-A boat slower than 0.5 kn counts as stopped: boats at anchor report a speed and course that are mostly noise, so two of them never alarm on each other. Anything actually moving towards you still does. Between 0.5 and 1 kn, a boat's reported speed, your own included, counts only once its position has moved about that far over two and a half minutes, or between two AIS reports: a boat yawing at anchor in gusts reports that much while it stays put.
+- **In harbour.** While you and another boat are both slower than 3 kn, the Harbour limits apply. A boat you pass more than 100 m off stays quiet; closer than that, even a moored one can warn, and within 50 m alarm.
+- **At your berth or at anchor.** While you are stopped, boats under 6 kn coming and going warn only within 100 m and alarm only within 50 m. Faster boats, such as ferries, keep your chosen limits.
+- **Stopped boats.** A boat slower than 0.5 kn gets the Harbour limits, whatever your speed. Passing it more than 100 m off raises nothing. Heading straight for it warns about 5 minutes ahead.
+- **Dragging anchor.** A boat that seems stopped but keeps moving in a straight line counts as moving once it has dragged about 60 m. A neighbour dragging towards you then warns, by the Harbour limits, about 5 minutes before it would reach you. The same goes for your own boat.
+- **Overtaking.** A boat you slowly overtake raises only if it will pass within 100 m. One that turns into you still warns in good time.
+- **Boats crossing behind you.** While you are under way, a boat that will cross your wake raises nothing, unless it will come within the alarm distance.
+- **Between AIS reports.** Small boats report only every 30 s. In between, each boat is judged where it is by now, carried on along its course for up to a minute.
+- **Busy waters.** At most 3 boats warn or alarm at once, the most urgent first. A warning that had to make room for a more urgent boat stays quiet for 2 minutes, unless it gets worse.
+- **No flicker.** An alarm stays on until the boat is clearly outside the limits again.
 
-A boat that will pass behind you, more than about 105° off your bow at its closest point, raises nothing unless it will come inside the alarm distance, because a boat crossing your wake is not on a collision course. One that will come that close warns and alarms as usual.
+The 3 kn is the setting **Use Harbour limits when both boats are slower than**. Set it to 0 to turn off the harbour, berth, stopped-boat and overtaking rules above, so every boat gets your chosen limits. Boats crossing your wake still stay quiet. The 3 boats are the setting **Alarm for at most this many targets at once**.
 
-A boat that reports being stopped but keeps moving the same way in a straight line, more than 60 m over four minutes or more, is judged by its measured course and speed, so a neighbour dragging its anchor toward you raises the alarm. Your own boat is treated the same way. Position noise and a boat swinging at anchor, which moves along an arc, don't count.
+## Radar alarms from mayara
 
-Between its reports, a moving boat is judged where it is by now: carried on from its last reported position at its course and speed, or at its measured drift, for at most a minute, since it may have turned. A Class B boat under way reports every 30 s and covers 60 m in that time at 4 kn; judged where it last reported, its closest approach would come too late or too early, and its distance could be off by up to that much. A boat carried on past its closest approach since its last report counts as still being there, though: one that has fallen silent may have stopped there. So an alarm for it stands until a report shows it has passed, until you have left it behind under way, or until its data grow older than **Ignore target data older than**. It does not keep its place among the most urgent from a boat still approaching, though.
+A current mayara plugin leaves radar collision alarms to this plugin, so a boat seen on radar alarms once. With an older one, set its radar collision alarm setting to _Leave to the Collision Alerts plugin_.
 
-By default, at most three targets alarm at once (**Alarm for at most this many targets at once**, 1 to 5): the highest level first, then the soonest closest approach. The rest alarm as soon as they become one of the most urgent, so a crowded anchorage doesn't bury you in alarms. A target cleared to make room for a more urgent one is held back for 2 minutes while below alarm level, even if a place frees up or its data drop out for a moment: within that time it is raised again only at a higher level than it had when it was pushed out, at alarm level, or as a new risk once it has been clearly outside every zone or beyond the **Ignore targets farther than** range. That way boats taking turns at the last places don't sound again and again for warnings already given. An alarm is never held back.
+## For app developers
 
-An alarm escalates as soon as a target enters a stricter zone, and is held until the target is clearly outside it again, so a CPA hovering on a limit doesn't make the alarm flicker.
-
-## Radar and other sensors
-
-The plugin also evaluates radar and camera targets that sensor plugins publish as `targets.<type>:<id>` contexts (mayara does this for ARPA targets), so boats without AIS are covered too. When a fusion plugin such as Target Fusion links a target to the AIS vessel it is (`sameAs`), the two are one boat and raise one alarm, not two. Install Target Fusion alongside this plugin if you have radar or a camera (the App Store lists it as recommended); without it a boat seen on both AIS and radar alarms twice. The boat then moves with whichever sensor reported last, so radar keeps tracking it after its AIS falls silent. The alarm points at the AIS vessel when there is one, and otherwise at the target's context (`targets.radar:…`); `data.sources` lists every sensor that sees it.
-
-Sensor plugins may also raise alarms of their own. While this plugin runs it emits the `collisionAlerts` PropertyValue `{ evaluatesTargets: true }` (and `{ evaluatesTargets: false }` when it stops), and the mayara plugin leaves radar alarms to it then (from the release with [mayara-server-signalk-plugin#148](https://github.com/MarineYachtRadar/mayara-server-signalk-plugin/pull/148)), so a ship seen on radar does not alarm twice. With an older mayara plugin, set its radar collision alarm setting to _Leave to the Collision Alerts plugin_ instead.
-
-## Development
-
-```shell
-npm install
-npm run build:all   # lint + format check, build, tests
-```
+Each alarm is a notification at `notifications.navigation.closestApproach.<target id>` on your own vessel, raised through the server's Notifications API, or as a plain notification delta on servers that don't manage notifications. Its `data` holds `targetRef` (the target's context, such as `vessels.urn:mrn:imo:mmsi:244123456` or `targets.radar:…`), `source`, `sources` (when radar or a camera sees the target), `cpa` (m), `tcpa` (s), `range` (m), `targetCog` (rad, `null` when stopped), `targetSog` (m/s) and `cpaPositions`. Each target in range also gets `navigation.closestApproach` `{ distance, timeTo }`, which can be turned off. While the plugin runs, it emits the `collisionAlerts` PropertyValue `{ evaluatesTargets: true }`, so sensor plugins can leave their alarms to it.
