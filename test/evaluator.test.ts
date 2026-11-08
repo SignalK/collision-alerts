@@ -1302,15 +1302,18 @@ describe('Evaluator', () => {
       expect(sink.calls).toEqual([[THIRD, undefined]])
     })
 
-    it('is raised at once once it has left every zone in between', () => {
-      const { sink, ev } = pushedOut()
-      ev.evaluate(own, { [OTHER]: wide, [THIRD]: headOn }, SELF, NOW + 4000)
-      sink.calls = []
-      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 6000)
-      expect(sink.calls).toEqual([
-        [THIRD, undefined],
-        [OTHER, expect.objectContaining({ level: 'warn' })]
-      ])
+    it('is raised at once once it has left every zone or the range in between', () => {
+      // 13 NM off, beyond the 12 NM range.
+      for (const away of [wide, at(13, 0)]) {
+        const { sink, ev } = pushedOut()
+        ev.evaluate(own, { [OTHER]: away, [THIRD]: headOn }, SELF, NOW + 4000)
+        sink.calls = []
+        ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 6000)
+        expect(sink.calls).toEqual([
+          [THIRD, undefined],
+          [OTHER, expect.objectContaining({ level: 'warn' })]
+        ])
+      }
     })
 
     it('is let go when the clock goes back, and on stop', () => {
