@@ -1261,7 +1261,8 @@ describe('Evaluator', () => {
       const { sink, ev } = pushedOut()
       // The head-on boat is gone, which frees the place.
       ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 4000)
-      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 120_000)
+      // Pushed out at NOW + 2 s: the last moment of the hold.
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 121_999)
       expect(sink.calls).toEqual([[THIRD, undefined]])
       ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 122_000)
       expect(sink.calls.at(-1)).toEqual([OTHER, expect.objectContaining({ level: 'warn' })])
@@ -1290,6 +1291,15 @@ describe('Evaluator', () => {
         [FOURTH, undefined],
         [OTHER, expect.objectContaining({ level: 'alarm' })]
       ])
+    })
+
+    it('stays held back through a report without a course', () => {
+      const { sink, ev } = pushedOut()
+      const noCourse = at(0.5, 0.4)
+      delete defined(noCourse.navigation).courseOverGroundTrue
+      ev.evaluate(own, { [OTHER]: noCourse }, SELF, NOW + 4000)
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 6000)
+      expect(sink.calls).toEqual([[THIRD, undefined]])
     })
 
     it('is raised at once once it has left every zone in between', () => {

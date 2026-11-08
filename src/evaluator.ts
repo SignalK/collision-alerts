@@ -308,6 +308,8 @@ export class Evaluator {
     const keepingDistanceSince = new Map<string, number>()
     const candidates: Candidate[] = []
     const seen = new Set<string>()
+    /** Targets without usable data on them or on own ship this evaluation. */
+    const withoutData = new Set<string>()
 
     for (const [targetId, node] of Object.entries(vessels)) {
       if (targetId === selfId || targetId === 'self') {
@@ -322,6 +324,9 @@ export class Evaluator {
       const result = own && target ? computeCpa(own, deadReckon(target, carried)) : null
       const context = contextOf(targetId, node)
       if (!target || !result || result.range > this.options.maxRange) {
+        if (!result) {
+          withoutData.add(targetId)
+        }
         // A short gap in the data doesn't end an overtaking: abreast, the boat
         // could not count as overtaken anew.
         const lastData = this.overtakenTargets.get(targetId)
@@ -470,13 +475,15 @@ export class Evaluator {
     for (const c of candidates) {
       this.levels.set(c.targetId, c.level)
     }
-    // A target that no longer has a level is no longer held back: should it
-    // raise again, that is a new risk.
+    // A target held back keeps its hold through a moment without usable
+    // data, such as a report without a course. One that no longer has a level
+    // is no longer held back: should it raise again, that is a new risk.
+    const levelOf = new Map(candidates.map((c) => [c.targetId, c.level]))
     const displaced = new Map<string, { level: AlertLevel; at: number }>()
-    for (const c of candidates) {
-      const d = this.displaced.get(c.targetId)
-      if (d && nowMs >= d.at && nowMs - d.at < DISPLACED_HOLD) {
-        displaced.set(c.targetId, d)
+    for (const [targetId, d] of this.displaced) {
+      const kept = levelOf.has(targetId) || withoutData.has(targetId)
+      if (kept && nowMs >= d.at && nowMs - d.at < DISPLACED_HOLD) {
+        displaced.set(targetId, d)
       }
     }
     const heldBack = (c: Candidate) => {
@@ -492,7 +499,6 @@ export class Evaluator {
       .sort((a, b) => this.compareUrgency(a, b))
       .slice(0, this.options.maxAlarms)
     const shownIds = new Set(shown.map((c) => c.targetId))
-    const levelOf = new Map(candidates.map((c) => [c.targetId, c.level]))
     // Clear displaced alarms first, so no more than maxAlarms are ever raised.
     for (const targetId of [...this.raised]) {
       if (!shownIds.has(targetId)) {
