@@ -504,6 +504,92 @@ describe('Evaluator', () => {
     })
   })
 
+  describe('a boat under way while we are stopped', () => {
+    const COS50 = Math.cos((50 * Math.PI) / 180)
+    const stopped = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    // `northM` north and `eastM` east of us, heading south at `sog` m/s:
+    // CPA `eastM` in `northM / sog` seconds.
+    const southbound = (northM: number, eastM: number, sog = 1.9) =>
+      vessel(50 + northM / 1852 / 60, 1 + eastM / 1852 / 60 / COS50, 180, sog)
+    const northbound = (northM: number, eastM: number, sog: number) =>
+      vessel(50 + northM / 1852 / 60, 1 + eastM / 1852 / 60 / COS50, 0, sog)
+    const levels = (sink: RecordingSink) => sink.calls.map(([, alert]) => alert?.level)
+
+    it('raises nothing when it passes 130 m off', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // CPA 130 m in 30 s: a Coastal alarm.
+      ev.evaluate(stopped, { [OTHER]: southbound(57, 130) }, SELF, NOW)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('keeps the normal limits when Harbour limits are turned off', () => {
+      const { sink, ev } = setup()
+      ev.evaluate(stopped, { [OTHER]: southbound(57, 130) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('warns but does not alarm when it passes 80 m off', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      ev.evaluate(stopped, { [OTHER]: southbound(57, 80) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
+    it('warns and alarms as early as the normal limits when it heads straight for us', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 3 m/s from 1800 m: CPA 0 in 10 min, beyond the Harbour limits' 5 min.
+      ev.evaluate(stopped, { [OTHER]: southbound(1800, 0, 3) }, SELF, NOW)
+      // From 900 m: CPA 0 in 5 min, inside the Coastal alarm's 6 min.
+      ev.evaluate(stopped, { [OTHER]: southbound(900, 0, 3) }, SELF, NOW + 2000)
+      expect(levels(sink)).toEqual(['warn', 'alarm'])
+    })
+
+    it('keeps the normal limits for a boat faster than 6 kn', () => {
+      // Passing 130 m off in 30 s, a Coastal alarm: at 3 m/s it raises nothing.
+      const under = setup({ slowSpeed: 1.5 })
+      under.ev.evaluate(stopped, { [OTHER]: southbound(90, 130, 3) }, SELF, NOW)
+      expect(under.sink.calls).toEqual([])
+      // At 3.2 m/s, above 6 kn, it alarms.
+      const over = setup({ slowSpeed: 1.5 })
+      over.ev.evaluate(stopped, { [OTHER]: southbound(96, 130, 3.2) }, SELF, NOW)
+      expect(over.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+
+    it('keeps the 30 s count for a boat we were overtaking', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // At 2 m/s we overtake it at 1.6 m/s, 600 m ahead and 80 m to starboard.
+      const moving = defined(toTrack(vessel(50, 1, 0, 2), NOW, 360))
+      ev.evaluate(moving, { [OTHER]: northbound(600, 80, 1.6) }, SELF, NOW)
+      // We stop, and it comes up past us 80 m off, still overtaken: CPA 80 m
+      // in about 3 min, which it raises only after 30 s in the zone.
+      let raisedAt: number | undefined
+      for (let s = 2; s <= 40 && raisedAt === undefined; s += 2) {
+        ev.evaluate(stopped, { [OTHER]: northbound(-300, 80, 1.6) }, SELF, NOW + s * 1000)
+        if (sink.calls.length > 0) {
+          raisedAt = s
+        }
+      }
+      expect(raisedAt).toBe(30)
+      expect(levels(sink)).toEqual(['warn'])
+    })
+
+    it('keeps the Harbour limits for a boat slower than the threshold', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 1 m/s from 600 m: CPA 0 in 10 min, beyond the Harbour limits' 5 min.
+      ev.evaluate(stopped, { [OTHER]: southbound(600, 0, 1) }, SELF, NOW)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('keeps an alarm raised while we moved until it clears', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      const moving = defined(toTrack(vessel(50, 1, 0, 2), NOW, 360))
+      ev.evaluate(moving, { [OTHER]: southbound(57, 130) }, SELF, NOW)
+      ev.evaluate(stopped, { [OTHER]: southbound(57, 130) }, SELF, NOW + 2000)
+      // 100 m past us, 53 s after its closest approach: the alarm clears.
+      ev.evaluate(stopped, { [OTHER]: southbound(-100, 130) }, SELF, NOW + 4000)
+      expect(levels(sink)).toEqual(['alarm', 'alarm', undefined])
+    })
+  })
+
   describe('a boat we overtake', () => {
     const COS50 = Math.cos((50 * Math.PI) / 180)
     // Own ship makes 5 m/s on 000°; the other boat 4 m/s on the same course.
