@@ -81,7 +81,8 @@ export function computeCpa(own: Track, target: Track): CpaResult {
   }
 }
 
-function advance(track: Track, seconds: number): LatLon {
+/** Where a track is after `seconds` at its course and speed. */
+export function advance(track: Track, seconds: number): LatLon {
   const lat = track.position.latitude * DEG
   const distance = track.sog * seconds
   const dy = distance * Math.cos(track.cog)

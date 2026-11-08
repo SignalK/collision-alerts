@@ -32,6 +32,8 @@ A boat that will pass behind you, more than about 105° off your bow at its clos
 
 A boat that reports being stopped but keeps moving the same way in a straight line, more than 60 m over four minutes or more, is judged by its measured course and speed, so a neighbour dragging its anchor toward you raises the alarm. Your own boat is treated the same way. Position noise and a boat swinging at anchor, which moves along an arc, don't count.
 
+Between its reports, a moving boat is judged where it is by now: carried on from its last reported position at its course and speed, or at its measured drift, for at most a minute, since it may have turned. A Class B boat under way reports every 30 s and covers 60 m in that time at 4 kn; judged where it last reported, its closest approach would come too late or too early, and its distance could be off by up to that much. A boat carried on past its closest approach since its last report counts as still being there, though: one that has fallen silent may have stopped there. So an alarm for it stands until a report shows it has passed, until you have left it behind under way, or until its data grow older than **Ignore target data older than**. It does not keep its place among the most urgent from a boat still approaching, though.
+
 By default, at most three targets alarm at once (**Alarm for at most this many targets at once**, 1 to 5): the highest level first, then the soonest closest approach. The rest alarm as soon as they become one of the most urgent, so a crowded anchorage doesn't bury you in alarms.
 
 An alarm escalates as soon as a target enters a stricter zone, and is held until the target is clearly outside it again, so a CPA hovering on a limit doesn't make the alarm flicker.

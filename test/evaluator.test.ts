@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { AlarmSink, CollisionAlert } from '../src/alarms.js'
-import { Evaluator, toTrack, type EvaluatorOptions, type VesselNode } from '../src/evaluator.js'
+import type { Track } from '../src/cpa.js'
+import {
+  deadReckon,
+  Evaluator,
+  reportAge,
+  toTrack,
+  type EvaluatorOptions,
+  type TargetNode,
+  type VesselNode
+} from '../src/evaluator.js'
 import { PRESETS } from '../src/zones.js'
 import { defined } from './helpers.js'
 
@@ -29,6 +38,47 @@ class RecordingSink implements AlarmSink {
   }
 }
 
+/** `node` with its report dated `time`, ms since the epoch. */
+function reportedAt<T extends VesselNode>(node: T, time: number): T {
+  const at = new Date(time).toISOString()
+  const nav = defined(node.navigation)
+  const stamp = <F extends { timestamp?: string }>(field: F | undefined) =>
+    field && { ...field, timestamp: at }
+  return {
+    ...node,
+    navigation: {
+      position: stamp(nav.position),
+      courseOverGroundTrue: stamp(nav.courseOverGroundTrue),
+      speedOverGround: stamp(nav.speedOverGround)
+    }
+  }
+}
+
+/**
+ * A report built by `vessel()` stands for the boat as it is at whatever time
+ * a test evaluates it, so it is dated to that time and dead reckoning leaves
+ * it where it is. Reports dated otherwise keep their time.
+ */
+class TestEvaluator extends Evaluator {
+  override evaluate(
+    own: Track | null,
+    vessels: Record<string, TargetNode>,
+    selfId: string,
+    nowMs: number
+  ) {
+    const dated = Object.entries(vessels).map(([id, node]) => [
+      id,
+      node.navigation?.position?.timestamp === fresh ? reportedAt(node, nowMs) : node
+    ])
+    return super.evaluate(
+      own,
+      Object.fromEntries(dated) as Record<string, TargetNode>,
+      selfId,
+      nowMs
+    )
+  }
+}
+
 const own = defined(toTrack(vessel(50, 1, 0, 5), NOW, 360))
 const SELF = 'urn:mrn:imo:mmsi:111111111'
 const OTHER = 'urn:mrn:imo:mmsi:222222222'
@@ -37,7 +87,7 @@ const FOURTH = 'urn:mrn:imo:mmsi:444444444'
 
 function setup(options: Partial<EvaluatorOptions> = {}) {
   const sink = new RecordingSink()
-  const ev = new Evaluator(
+  const ev = new TestEvaluator(
     {
       zones: PRESETS.coastal,
       slowZones: PRESETS.harbour,
@@ -69,6 +119,126 @@ describe('toTrack', () => {
     const v = vessel(50, 1, 0, 5)
     delete defined(v.navigation).courseOverGroundTrue
     expect(toTrack(v, NOW, 360)).toBeNull()
+  })
+})
+
+describe('dead reckoning', () => {
+  const stopped = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+  // `northM` north of us, heading south at 2 m/s.
+  const closing = (northM: number) => vessel(50 + northM / 1852 / 60, 1, 180, 2)
+  const resultOf = (evaluations: ReturnType<Evaluator['evaluate']>) =>
+    defined(evaluations.find((e) => e.targetId === OTHER)?.result)
+
+  it('judges a target where it is now, not where it reported', () => {
+    const { ev } = setup()
+    // Reported 300 m off 30 s ago: 240 m off now, closest approach in 120 s.
+    const result = resultOf(
+      ev.evaluate(stopped, { [OTHER]: reportedAt(closing(300), NOW - 30_000) }, SELF, NOW)
+    )
+    expect(result.range).toBeCloseTo(240, 0)
+    expect(result.tcpa).toBeCloseTo(120, 0)
+  })
+
+  it('raises a level between two reports once the target is inside the zone', () => {
+    const { sink, ev } = setup()
+    // Reported 760 m off: closest approach in 380 s, a Coastal warning.
+    const report = reportedAt(closing(760), NOW)
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW)
+    // 30 s on, without a new report, it is in 350 s: inside the 6 min alarm.
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW + 30_000)
+    expect(sink.calls.map(([, alert]) => alert?.level)).toEqual(['warn', 'alarm'])
+  })
+
+  it('carries a target on for no longer than a minute', () => {
+    const { ev } = setup()
+    // Reported 300 m off 2 min ago: carried on for 1 min, 180 m off.
+    const result = resultOf(
+      ev.evaluate(stopped, { [OTHER]: reportedAt(closing(300), NOW - 120_000) }, SELF, NOW)
+    )
+    expect(result.range).toBeCloseTo(180, 0)
+  })
+
+  it('leaves a stopped target, and a report without a time or from the future, where it is', () => {
+    const position = { latitude: 50, longitude: 1 }
+    const anchored = { position, cog: 1, sog: 0 }
+    expect(deadReckon(anchored, 30)).toBe(anchored)
+    expect(reportAge(Number.NaN, NOW)).toBe(0)
+    expect(reportAge(NOW + 5000, NOW)).toBe(0)
+    expect(reportAge(NOW - 30_000, NOW)).toBe(30)
+    expect(reportAge(NOW - 120_000, NOW)).toBe(60)
+  })
+
+  it('judges an old report like a fresh one where the boat is by now', () => {
+    // Own ship makes 5 m/s north; the boat crosses westward at 4 m/s, 600 m
+    // north and 300 m east, reported 30 s ago: by now 180 m east.
+    const crossing = (eastM: number) =>
+      vessel(50 + 600 / 1852 / 60, 1 + eastM / 1852 / 60 / Math.cos((50 * Math.PI) / 180), 270, 4)
+    const old = resultOf(
+      setup().ev.evaluate(own, { [OTHER]: reportedAt(crossing(300), NOW - 30_000) }, SELF, NOW)
+    )
+    const fresh = resultOf(
+      setup().ev.evaluate(own, { [OTHER]: reportedAt(crossing(180), NOW) }, SELF, NOW)
+    )
+    expect(old.cpa).toBeCloseTo(fresh.cpa, 0)
+    expect(old.tcpa).toBeCloseTo(fresh.tcpa, 0)
+    expect(old.range).toBeCloseTo(fresh.range, 0)
+  })
+
+  it('holds the alarm of a boat that falls silent near its closest approach', () => {
+    const { sink, ev } = setup()
+    // 40 m off, closest approach in 20 s; then it falls silent. Carried on a
+    // minute, it is 80 m past us, but it may have stopped.
+    const report = reportedAt(closing(40), NOW)
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW)
+    const result = resultOf(ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW + 60_000))
+    expect(result.range).toBeCloseTo(80, 0)
+    expect(sink.calls.map(([, alert]) => alert?.level)).toEqual(['alarm', 'alarm'])
+  })
+
+  it('lets a silent boat held at its closest approach give its place to one approaching', () => {
+    const { sink, ev } = setup({ maxAlarms: 1 })
+    const silent = reportedAt(closing(40), NOW)
+    ev.evaluate(stopped, { [OTHER]: silent }, SELF, NOW)
+    // 30 s on, the silent boat is held; another comes at us from 300 m east
+    // at 2 m/s, closest approach 0 in 150 s.
+    const east = vessel(50, 1 + 300 / 1852 / 60 / Math.cos((50 * Math.PI) / 180), 270, 2)
+    sink.calls = []
+    ev.evaluate(
+      stopped,
+      { [OTHER]: silent, [THIRD]: reportedAt(east, NOW + 30_000) },
+      SELF,
+      NOW + 30_000
+    )
+    expect(sink.calls).toEqual([
+      [OTHER, undefined],
+      [THIRD, expect.objectContaining({ level: 'alarm' })]
+    ])
+  })
+
+  it('clears a boat that overtakes us once its reports show it past, and only once', () => {
+    const { sink, ev } = setup()
+    // Both on 045°: we make 4 m/s, it 5 m/s, coming up from 200 m astern to
+    // pass 30 m to starboard, reporting every 30 s as a Class B boat does.
+    const COS50 = Math.cos((50 * Math.PI) / 180)
+    const at = (northM: number, eastM: number, sog: number) =>
+      vessel(50 + northM / 1852 / 60, 1 + eastM / 1852 / 60 / COS50, 45, sog)
+    const r = Math.SQRT1_2
+    const states: Array<string | undefined> = []
+    for (let s = 0; s <= 400; s += 2) {
+      const ahead = 4 * s
+      const time = NOW + s * 1000
+      const ownNow = defined(toTrack(reportedAt(at(ahead * r, ahead * r, 4), time), time, 360))
+      const reported = s - (s % 30)
+      const along = -200 + 5 * reported
+      // Starboard of 045° is 135°: 30 m that way.
+      const boat = reportedAt(at(along * r - 30 * r, along * r + 30 * r, 5), NOW + reported * 1000)
+      ev.evaluate(ownNow, { [OTHER]: boat }, SELF, time)
+      const level = sink.calls.at(-1)?.[1]?.level
+      if (sink.calls.length > 0 && states.at(-1) !== level) {
+        states.push(level)
+      }
+    }
+    expect(states).toEqual(['alarm', undefined])
   })
 })
 

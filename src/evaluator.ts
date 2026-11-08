@@ -1,4 +1,4 @@
-import { computeCpa, type CpaResult, type Track } from './cpa.js'
+import { advance, computeCpa, type CpaResult, type Track } from './cpa.js'
 import type { AlarmSink, CollisionAlert } from './alarms.js'
 import { DriftDetector } from './drift.js'
 import { MotionCheck } from './motion.js'
@@ -90,6 +90,13 @@ const OVERTAKEN_RAISE_DELAY = 30_000
 // falls silent stays usable until its data are older than maxAge.
 const OVERTAKEN_DATA_GAP = 60_000
 
+// A target is judged where it is now, not where it last reported: own ship's
+// position is fresh, while a Class B boat under way reports every 30 s and
+// covers 60 m in that at 4 kn. It is carried on at its course and speed for
+// no longer than this (ms), one missed Class B report, since it may have
+// turned since.
+const MAX_DEAD_RECKONING = 60_000
+
 // A target already alarmed ranks as if its closest approach came this many
 // seconds sooner, so two targets of similar urgency don't take turns at the
 // last alarm slot, which would re-sound the alarm every few seconds.
@@ -130,6 +137,20 @@ export function toTrack(node: VesselNode | undefined, nowMs: number, maxAge: num
     return null
   }
   return { position, sog, cog }
+}
+
+/**
+ * How long (s) a target reported at `positionTime` is carried on to `nowMs`:
+ * 0 for a report without a time or from the future.
+ */
+export function reportAge(positionTime: number, nowMs: number): number {
+  const age = Math.min(nowMs - positionTime, MAX_DEAD_RECKONING) / 1000
+  return age > 0 ? age : 0
+}
+
+/** `track` carried on `seconds` at its course and speed. */
+export function deadReckon(track: Track, seconds: number): Track {
+  return seconds > 0 && track.sog > 0 ? { ...track, position: advance(track, seconds) } : track
 }
 
 /** When the vessel's position was reported, ms since the epoch; NaN when unknown. */
@@ -277,7 +298,8 @@ export class Evaluator {
       const raw = own ? toTrack(node, nowMs, this.options.maxAge) : null
       const reported = raw && this.motion.apply(targetId, raw, time)
       const target = reported && this.drift.apply(targetId, reported, time)
-      const result = own && target ? computeCpa(own, target) : null
+      const carried = reportAge(time, nowMs)
+      const result = own && target ? computeCpa(own, deadReckon(target, carried)) : null
       const context = contextOf(targetId, node)
       if (!target || !result || result.range > this.options.maxRange) {
         // A short gap in the data doesn't end an overtaking: abreast, the boat
@@ -368,12 +390,20 @@ export class Evaluator {
         keepingDistanceSince.set(targetId, since)
         tcpa = (since - nowMs) / 1000
       }
-      let level = passesWideAstern ? undefined : assess(zones, result.cpa, tcpa, current)
+      // Carried on, it passed its closest approach since its last report. A
+      // boat that has fallen silent may have stopped there, so its level is
+      // judged as if it were there until a report shows it past: a level it
+      // holds stands, and none is raised, since that needs time still to
+      // come. It ranks as passed, so it keeps no place from a boat still
+      // approaching.
+      const judgedTcpa =
+        !result.keepingDistance && target.sog > 0 && tcpa < 0 && tcpa > -carried ? 0 : tcpa
+      let level = passesWideAstern ? undefined : assess(zones, result.cpa, judgedTcpa, current)
       // Custom zones can be laxer than the slow ones in places, so the zones
       // held for a raised level don't stop the ones it would be judged by now
       // from raising it further.
       if (zoneSet !== judgedBy) {
-        const now = assess(this.zonesOf(judgedBy), result.cpa, tcpa, current)
+        const now = assess(this.zonesOf(judgedBy), result.cpa, judgedTcpa, current)
         if (now && (!level || SEVERITY[now] > SEVERITY[level])) {
           level = now
         }
@@ -387,7 +417,7 @@ export class Evaluator {
         overtakenInZone.set(targetId, { net, at: nowMs })
         if (
           net < OVERTAKEN_RAISE_DELAY &&
-          assess(this.overtakenAtOnceZones, result.cpa, tcpa, undefined) === undefined
+          assess(this.overtakenAtOnceZones, result.cpa, judgedTcpa, undefined) === undefined
         ) {
           level = undefined
         }
