@@ -1261,6 +1261,10 @@ describe('Evaluator', () => {
       const { sink, ev } = pushedOut()
       // The head-on boat is gone, which frees the place.
       ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 4000)
+      // A report without a course doesn't start the hold anew.
+      const noCourse = at(0.5, 0.4)
+      delete defined(noCourse.navigation).courseOverGroundTrue
+      ev.evaluate(own, { [OTHER]: noCourse }, SELF, NOW + 120_000)
       // Pushed out at NOW + 2 s: the last moment of the hold.
       ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 121_999)
       expect(sink.calls).toEqual([[THIRD, undefined]])
@@ -1298,6 +1302,13 @@ describe('Evaluator', () => {
       const noCourse = at(0.5, 0.4)
       delete defined(noCourse.navigation).courseOverGroundTrue
       ev.evaluate(own, { [OTHER]: noCourse }, SELF, NOW + 4000)
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 6000)
+      expect(sink.calls).toEqual([[THIRD, undefined]])
+    })
+
+    it('stays held back through a moment without own data', () => {
+      const { sink, ev } = pushedOut()
+      ev.evaluate(null, { [OTHER]: passing }, SELF, NOW + 4000)
       ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 6000)
       expect(sink.calls).toEqual([[THIRD, undefined]])
     })
