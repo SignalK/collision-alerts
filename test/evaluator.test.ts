@@ -543,13 +543,14 @@ describe('Evaluator', () => {
       expect(levels(sink)).toEqual(['warn', 'alarm'])
     })
 
-    it('keeps the normal limits for a boat faster than 6 kn', () => {
+    it('keeps the normal limits for a boat at 6 kn or faster', () => {
       // Passing 130 m off in 30 s, a Coastal alarm: at 3 m/s it raises nothing.
       const under = setup({ slowSpeed: 1.5 })
       under.ev.evaluate(stopped, { [OTHER]: southbound(90, 130, 3) }, SELF, NOW)
       expect(under.sink.calls).toEqual([])
-      // At 3.2 m/s, above 6 kn, it alarms, and at 3.088 m/s, just above.
-      for (const sog of [3.2, 3.088]) {
+      // At 3.2 m/s, above 6 kn, it alarms, as at 3.088 m/s, just above, and at
+      // 6 kn exactly.
+      for (const sog of [3.2, 3.088, (6 * 1852) / 3600]) {
         const over = setup({ slowSpeed: 1.5 })
         over.ev.evaluate(stopped, { [OTHER]: southbound(30 * sog, 130, sog) }, SELF, NOW)
         expect(over.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
