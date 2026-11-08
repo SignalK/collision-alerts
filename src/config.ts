@@ -35,7 +35,7 @@ export const ConfigSchema = Type.Object({
   maxAlarms: Type.Integer({
     title: 'Alarm for at most this many targets at once',
     description:
-      'Only the most urgent targets alarm: the highest level first, then the soonest closest approach. Others alarm when they become one of the most urgent. A target cleared to make room for a more urgent one is held back for 2 minutes while below alarm level, unless it reaches a higher level than it had; an alarm is never held back.',
+      'Only the most urgent targets alarm: the highest level first, then the soonest closest approach. Others alarm when they become one of the most urgent. A target cleared to make room for a more urgent one is held back for 2 minutes while below alarm level, unless it reaches a higher level than it had or clears every zone and comes back; an alarm is never held back.',
     minimum: 1,
     maximum: 5,
     default: 3
