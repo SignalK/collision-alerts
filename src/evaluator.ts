@@ -103,7 +103,7 @@ const MAX_DEAD_RECKONING = 60_000
 // zones: within their time window it is still far off, where a degree or two
 // of error in its reported course puts its closest approach beyond the cut
 // distances, and a ship heading straight for us would warn minutes late.
-const HARBOUR_TRAFFIC_SPEED = 3.09
+const HARBOUR_TRAFFIC_SPEED = (6 * 1852) / 3600
 
 // A target already alarmed ranks as if its closest approach came this many
 // seconds sooner, so two targets of similar urgency don't take turns at the
