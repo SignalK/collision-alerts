@@ -575,6 +575,35 @@ describe('Evaluator', () => {
       expect(levels(sink)).toEqual(['warn'])
     })
 
+    it('takes the normal timing at once for a boat speeding up past the threshold', () => {
+      // At 1.5 m/s, the threshold itself, and at 1.6 m/s, within the slow
+      // zones' release margin.
+      for (const sog of [1.5, 1.6]) {
+        const { sink, ev } = setup({ slowSpeed: 1.5 })
+        // 1.4 m/s from 1200 m: CPA 0 in 14 min, beyond every warning.
+        ev.evaluate(stopped, { [OTHER]: southbound(1200, 0, 1.4) }, SELF, NOW)
+        // CPA 0 in 10 min: inside the Coastal warning's 12 min, beyond the
+        // Harbour 5 min.
+        ev.evaluate(stopped, { [OTHER]: southbound(600 * sog, 0, sog) }, SELF, NOW + 2000)
+        // Back at 1.4 m/s it keeps the warning.
+        ev.evaluate(stopped, { [OTHER]: southbound(800, 0, 1.4) }, SELF, NOW + 4000)
+        expect(levels(sink)).toEqual(['warn', 'warn'])
+      }
+    })
+
+    it('keeps a level raised by the slow zones through speed noise at the threshold', () => {
+      // Custom limits with less time than Harbour's: an alarm within 185 m and
+      // 3 min, which cut to 50 m.
+      const zones = [{ level: 'alarm' as const, cpa: 185, tcpa: 180 }]
+      const { sink, ev } = setup({ slowSpeed: 1.5, zones })
+      // CPA 80 m in 4 min, a Harbour warning, at 1.4 and 1.6 m/s in turn.
+      for (let i = 0; i < 4; i++) {
+        const sog = i % 2 === 0 ? 1.4 : 1.6
+        ev.evaluate(stopped, { [OTHER]: southbound(240 * sog, 80, sog) }, SELF, NOW + i * 2000)
+      }
+      expect(levels(sink)).toEqual(['warn', 'warn', 'warn', 'warn'])
+    })
+
     it('keeps the Harbour limits for a boat slower than the threshold', () => {
       const { sink, ev } = setup({ slowSpeed: 1.5 })
       // 1 m/s from 600 m: CPA 0 in 10 min, beyond the Harbour limits' 5 min.

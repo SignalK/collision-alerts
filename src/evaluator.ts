@@ -367,7 +367,6 @@ export class Evaluator {
       if (overtaken) {
         overtakenTargets.set(targetId, nowMs)
       }
-      const slow = (ownSlow && targetSlow) || (stopped && this.options.slowSpeed > 0)
       // Lying at a berth or at anchor, we see boats come and go a few boat
       // lengths off all the time, and the normal zones would alarm for each.
       // While we are stopped, harbour traffic raises only for a closest
@@ -375,13 +374,20 @@ export class Evaluator {
       // normal zones would, so a boat heading straight for us still warns in
       // good time.
       const harbourTraffic = ownStopped && target.sog < HARBOUR_TRAFFIC_SPEED
+      const current = this.levels.get(targetId)
+      // Such a boat faster than slowSpeed, with nothing raised yet, leaves the
+      // slow zones at once rather than after their release margin, so one
+      // speeding up towards us warns as early as the normal zones would. A
+      // raised level stays on its zones, as below.
+      const leftSlow =
+        harbourTraffic && current === undefined && target.sog >= this.options.slowSpeed
+      const slow = (ownSlow && targetSlow && !leftSlow) || (stopped && this.options.slowSpeed > 0)
       const judgedBy = slow ? SLOW_SET : overtaken || harbourTraffic ? CUT_SET : NORMAL_SET
       let zoneSet = judgedBy
       // A raised level keeps the strictest zones it was judged by until it
       // clears: speed noise near a threshold would otherwise swap the zones
       // every few updates, clearing the alarm and raising it anew, each time
       // with sound.
-      const current = this.levels.get(targetId)
       const previous = this.zoneSets.get(targetId)
       if (current !== undefined && previous !== undefined && previous > zoneSet) {
         zoneSet = previous
