@@ -1,0 +1,7 @@
+reviews:
+  pre_merge_checks:
+    # The coverage check wants docstrings on 80% of the non-trivial functions
+    # a PR touches, while AGENTS.md asks for code that explains itself, with
+    # comments only for what names and types cannot say.
+    docstrings:
+      mode: 'off'

@@ -50,6 +50,15 @@ sensors raises one alarm.
   stale, out of range, own ship stale, `stop()`) must release its alarm, or a
   stale alarm sounds forever.
 
+## Code style
+
+- **Code explains itself.** Names say what a thing is or does. A comment adds
+  what names and types cannot: units, sign conventions, the reason for a
+  choice. No echo comments that restate the code, and no docstrings just for
+  coverage: CodeRabbit's docstring check is off in `.coderabbit.yaml`.
+- **Comments describe the code as it is now.** What changed and which bug it
+  fixed belong in the commit message and the PR.
+
 ## Commands
 
 - `npm run format` — prettier + eslint --fix
