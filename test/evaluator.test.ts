@@ -60,6 +60,7 @@ function reportedAt<T extends VesselNode>(node: T, time: number): T {
  * it where it is. Reports dated otherwise keep their time.
  */
 class TestEvaluator extends Evaluator {
+  /** Evaluates `vessels` with each `vessel()` report dated `nowMs`. */
   override evaluate(
     own: Track | null,
     vessels: Record<string, TargetNode>,
