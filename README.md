@@ -33,7 +33,7 @@ The plugin tries to alarm only when it matters:
 - **Dragging anchor.** A boat that seems stopped but keeps moving in a straight line counts as moving once it has dragged about 60 m. A neighbour dragging towards you then warns, by the Harbour limits, about 5 minutes before it would reach you. The same goes for your own boat.
 - **Overtaking.** A boat you slowly overtake raises only if it will pass within 100 m. One that turns into you still warns in good time.
 - **Boats crossing behind you.** While you are under way, a boat that will cross your wake raises nothing, unless it will come within the alarm distance.
-- **Between AIS reports.** Small boats report only every 30 s. In between, each boat is judged where it is by now, carried on along its course for up to a minute.
+- **Between AIS reports.** Small boats report only every 30 s. In between, each boat is judged where it is by now, carried on along its course for up to a minute. A moving boat judged by the Harbour limits alarms only once a report puts it inside the alarm limits, or once its last report is 40 s old: it may be turning into its berth.
 - **Busy waters.** At most 3 boats warn or alarm at once, the most urgent first. A warning that had to make room for a more urgent boat stays quiet for 2 minutes, unless it turns into an alarm or clears the limits and comes back.
 - **No flicker.** An alarm stays on until the boat is clearly outside the limits again.
 

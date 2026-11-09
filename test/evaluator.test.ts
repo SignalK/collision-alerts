@@ -243,6 +243,142 @@ describe('dead reckoning', () => {
   })
 })
 
+describe('a boat judged by the Harbour limits between its reports', () => {
+  const COS50 = Math.cos((50 * Math.PI) / 180)
+  const stopped = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+  // `northM` north and `eastM` east of us on `cogDeg` at `sog` m/s.
+  const at = (northM: number, eastM: number, cogDeg: number, sog: number) =>
+    vessel(50 + northM / 1852 / 60, 1 + eastM / 1852 / 60 / COS50, cogDeg, sog)
+  const levels = (sink: RecordingSink) => sink.calls.map(([, alert]) => alert?.level)
+
+  it('rises no higher than its last report gives until the next report', () => {
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    // Heading south at 0.6 m/s: CPA 36 m in 145 s, a Harbour warning.
+    const report = reportedAt(at(87, 36, 180, 0.6), NOW)
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW)
+    // Carried on 27 s, its closest approach is 118 s ahead, inside the
+    // Harbour alarm's 2 min: it stays a warning.
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW + 27_000)
+    // Its next report shows it turning away.
+    const turned = reportedAt(at(69, 36, 90, 0.6), NOW + 31_000)
+    ev.evaluate(stopped, { [OTHER]: turned }, SELF, NOW + 31_000)
+    expect(levels(sink)).not.toContain('alarm')
+    expect(levels(sink).slice(0, 2)).toEqual(['warn', 'warn'])
+  })
+
+  it('alarms once a report confirms it', () => {
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    const report = reportedAt(at(87, 36, 180, 0.6), NOW)
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW)
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW + 27_000)
+    // Still coming on: CPA 36 m in 115 s.
+    const next = reportedAt(at(69, 36, 180, 0.6), NOW + 30_000)
+    ev.evaluate(stopped, { [OTHER]: next }, SELF, NOW + 30_000)
+    expect(levels(sink)).toEqual(['warn', 'warn', 'alarm'])
+  })
+
+  it('alarms on dead reckoning once its report is 40 s old', () => {
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    const report = reportedAt(at(87, 36, 180, 0.6), NOW)
+    for (const s of [0, 39, 40]) {
+      ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW + s * 1000)
+    }
+    expect(levels(sink)).toEqual(['warn', 'warn', 'alarm'])
+  })
+
+  it('raises a warning on dead reckoning, as before', () => {
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    // CPA 36 m in 330 s, beyond the Harbour warning's 5 min; carried on 35 s,
+    // in 295 s.
+    const report = reportedAt(at(198, 36, 180, 0.6), NOW)
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW)
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW + 35_000)
+    expect(levels(sink)).toEqual(['warn'])
+  })
+
+  it('keeps the warning of a boat in company while we move', () => {
+    const slowSpeed = (3 * 1852) / 3600
+    const { sink, ev } = setup({ slowSpeed })
+    // We make 1.35 m/s north; it makes 1.5 m/s north, 22 m astern and 30 m to
+    // starboard: CPA 30 m in 147 s, a Harbour warning.
+    const ownAt = (s: number) =>
+      defined(toTrack(vessel(50 + (1.35 * s) / 1852 / 60, 1, 0, 1.35), NOW + s * 1000, 360))
+    const report = reportedAt(at(-22, 30, 0, 1.5), NOW)
+    for (const s of [0, 26, 28]) {
+      ev.evaluate(ownAt(s), { [OTHER]: report }, SELF, NOW + s * 1000)
+    }
+    // Its next report: CPA 30 m in 117 s.
+    const next = reportedAt(at(-22 + 1.5 * 30, 30, 0, 1.5), NOW + 30_000)
+    ev.evaluate(ownAt(30), { [OTHER]: next }, SELF, NOW + 30_000)
+    expect(levels(sink)).toEqual(['warn', 'warn', 'warn', 'alarm'])
+  })
+
+  it('alarms by the zones a level was raised by, as reported', () => {
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    // At 2 m/s we close on it at 3 m/s: CPA 300 m in 667 s, a Coastal warning.
+    const fast = defined(toTrack(vessel(50, 1, 0, 2), NOW, 360))
+    ev.evaluate(fast, { [OTHER]: at(2000, 300, 180, 1) }, SELF, NOW)
+    // We slow to 1 m/s, both below the threshold. Reported 20 s ago, it closes
+    // at 2 m/s: CPA 300 m in 330 s as reported, in 310 s carried on, a
+    // Coastal alarm both ways.
+    const slow = defined(toTrack(vessel(50, 1, 0, 1), NOW + 2000, 360))
+    const report = reportedAt(at(640, 300, 180, 1), NOW - 18_000)
+    ev.evaluate(slow, { [OTHER]: report }, SELF, NOW + 2000)
+    expect(levels(sink)).toEqual(['warn', 'alarm'])
+  })
+
+  it('never lowers an alarm it already has', () => {
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    // CPA 30 m in 100 s: an alarm.
+    ev.evaluate(stopped, { [OTHER]: at(84, 30, 180, 0.84) }, SELF, NOW)
+    // It slowed to 0.55 m/s: reported 10 s ago, closest approach in 150 s,
+    // beyond the alarm's hold; carried on, in 140 s, inside it.
+    const slowed = reportedAt(at(82.5, 30, 180, 0.55), NOW + 2000)
+    ev.evaluate(stopped, { [OTHER]: slowed }, SELF, NOW + 12_000)
+    expect(levels(sink)).toEqual(['alarm', 'alarm'])
+  })
+
+  it('lets a held emergency fall back to the alarm dead reckoning gives', () => {
+    const zones = [
+      { level: 'warn' as const, cpa: 926, tcpa: 720 },
+      { level: 'alarm' as const, cpa: 463, tcpa: 360 },
+      { level: 'emergency' as const, cpa: 200, tcpa: 200 }
+    ]
+    const { sink, ev } = setup({ slowSpeed: 1.5, zones })
+    // At 2 m/s we close on it at 3 m/s: CPA 100 m in 167 s, an emergency.
+    const fast = defined(toTrack(vessel(50, 1, 0, 2), NOW, 360))
+    ev.evaluate(fast, { [OTHER]: at(500, 100, 180, 1) }, SELF, NOW)
+    // We slow to 1 m/s, both below the threshold. Reported 20 s ago, it
+    // closes at 2 m/s: CPA 100 m in 420 s carried on, an alarm by the zones it
+    // was raised by; in 440 s as reported, a warning.
+    const slow = defined(toTrack(vessel(50, 1, 0, 1), NOW + 2000, 360))
+    const report = reportedAt(at(860, 100, 180, 1), NOW - 18_000)
+    ev.evaluate(slow, { [OTHER]: report }, SELF, NOW + 2000)
+    expect(levels(sink)).toEqual(['emergency', 'alarm'])
+  })
+
+  it('alarms at once for an anchored boat we close on from a 30 s old report', () => {
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    // We make 1 m/s north; it lies 110 m ahead, last reported 30 s ago as a
+    // boat at anchor does every 3 min: CPA 0 in 110 s.
+    const moving = defined(toTrack(vessel(50, 1, 0, 1), NOW, 360))
+    const anchored = reportedAt(at(110, 0, 0, 0), NOW - 30_000)
+    ev.evaluate(moving, { [OTHER]: anchored }, SELF, NOW)
+    expect(levels(sink)).toEqual(['alarm'])
+  })
+
+  it('leaves a boat judged by other zones rising on dead reckoning', () => {
+    const { sink, ev } = setup({ slowSpeed: 1.5 })
+    // At 2 m/s, faster than the threshold, it is judged by the cut zones:
+    // CPA 30 m in 380 s, a warning; carried on 30 s, in 350 s, inside the
+    // alarm's 6 min.
+    const report = reportedAt(at(760, 30, 180, 2), NOW)
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW)
+    ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW + 30_000)
+    expect(levels(sink)).toEqual(['warn', 'alarm'])
+  })
+})
+
 describe('a boat dragging its anchor', () => {
   it('alarms although it reports being stopped', () => {
     const { sink, ev } = setup()

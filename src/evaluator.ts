@@ -112,6 +112,15 @@ const HARBOUR_TRAFFIC_SPEED = (6 * 1852) / 3600
 // places would sound every few seconds. An alarm is never held back.
 const DISPLACED_HOLD = 120_000
 
+// Judged by the slow zones, a boat moves slowly and often turns, as when it
+// heads for its berth: carried on since its last report, it may be turning
+// away already. For this long (ms) after its last report, a little longer
+// than the 30 s between a Class B boat's reports, it alarms only if that
+// report put it inside the alarm zone, so the next report confirms an alarm
+// or calls it off. After that it alarms on dead reckoning: a Class B boat
+// below 2 kn reports only every 3 min.
+const REPORT_CONFIRM_WAIT = 40_000
+
 // A target already alarmed ranks as if its closest approach came this many
 // seconds sooner, so two targets of similar urgency don't take turns at the
 // last alarm slot, which would re-sound the alarm every few seconds.
@@ -229,6 +238,10 @@ function cutDistances(zones: Zone[], slowZones: Zone[]): Zone[] {
 const SLOW_SET = 0
 const CUT_SET = 1
 const NORMAL_SET = 2
+
+function severity(level: AlertLevel | undefined): number {
+  return level === undefined ? 0 : SEVERITY[level]
+}
 
 function contextOf(targetId: string, node: TargetNode | undefined): string {
   return node?.context ?? `vessels.${targetId}`
@@ -426,7 +439,6 @@ export class Evaluator {
       // approaching.
       const judgedTcpa =
         !result.keepingDistance && target.sog > 0 && tcpa < 0 && tcpa > -carried ? 0 : tcpa
-      let level = passesWideAstern ? undefined : assess(zones, result.cpa, judgedTcpa, current)
       // A raised level is judged by every zone set it has been judged by since
       // it was raised, until it clears: speed noise near a threshold would
       // otherwise swap the zones every few updates, clearing the alarm and
@@ -435,15 +447,35 @@ export class Evaluator {
       // any of them gives.
       const judgedSets = new Set(current !== undefined ? this.zoneSets.get(targetId) : undefined)
       judgedSets.add(judgedBy)
-      for (const set of judgedSets) {
-        if (set !== judgedBy) {
-          const held = assess(this.zonesOf(set), result.cpa, judgedTcpa, current)
-          if (held && (!level || SEVERITY[held] > SEVERITY[level])) {
-            level = held
+      zoneSets.set(targetId, judgedSets)
+      const judge = (cpa: number, closestIn: number) => {
+        let level = passesWideAstern ? undefined : assess(zones, cpa, closestIn, current)
+        for (const set of judgedSets) {
+          if (set !== judgedBy) {
+            const held = assess(this.zonesOf(set), cpa, closestIn, current)
+            if (held && (!level || SEVERITY[held] > SEVERITY[level])) {
+              level = held
+            }
           }
         }
+        return level
       }
-      zoneSets.set(targetId, judgedSets)
+      let level = judge(result.cpa, judgedTcpa)
+      if (
+        judgedBy === SLOW_SET &&
+        target.sog > 0 &&
+        carried * 1000 < REPORT_CONFIRM_WAIT &&
+        severity(level) >= SEVERITY.alarm
+      ) {
+        // At its last report, its closest approach was as close, only further
+        // ahead.
+        const asReported = judge(result.cpa, tcpa + carried)
+        if (severity(asReported) < severity(level)) {
+          // Never below a level it has and keeps carried on.
+          const kept = severity(current) < severity(level) ? current : level
+          level = severity(asReported) > severity(kept) ? asReported : kept
+        }
+      }
       if (current === undefined && overtaken && judgedBy === CUT_SET) {
         // An evaluation counts for no more than the time since the one
         // before, so a gap in this boat's data adds little.
