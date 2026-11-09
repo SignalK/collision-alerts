@@ -501,9 +501,10 @@ export class Evaluator {
       .slice(0, this.options.maxAlarms)
     const shownIds = new Set(shown.map((c) => c.targetId))
     const cleared = [...this.raised].filter((targetId) => !shownIds.has(targetId))
+    // One left raised by a clear that failed keeps the hold it got then.
     for (const targetId of cleared) {
       const level = levelOf.get(targetId)
-      if (level) {
+      if (level && !displaced.has(targetId)) {
         displaced.set(targetId, { level, at: nowMs })
       }
     }

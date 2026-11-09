@@ -1341,6 +1341,34 @@ describe('Evaluator', () => {
       expect(sink.calls).toEqual([])
     })
 
+    it('keeps the hold time of a target left raised by a failed clear', () => {
+      const FIFTH = 'urn:mrn:imo:mmsi:555555555'
+      const { sink, ev } = setup({ maxAlarms: 2 })
+      // Two warnings, 0.4 NM to either side.
+      const warnings = { [OTHER]: passing, [FOURTH]: at(0.5, -0.4) }
+      ev.evaluate(own, warnings, SELF, NOW)
+      const set = sink.set.bind(sink)
+      let failed = false
+      sink.set = (id: string, alert: CollisionAlert | undefined) => {
+        if (!alert && !failed) {
+          failed = true
+          throw new Error('clear failed')
+        }
+        set(id, alert)
+      }
+      // Two head-on boats push both out, and the first clear fails.
+      const alarms = { [THIRD]: headOn, [FIFTH]: at(1, 0.05) }
+      expect(() => ev.evaluate(own, { ...warnings, ...alarms }, SELF, NOW + 2000)).toThrow(
+        'clear failed'
+      )
+      ev.evaluate(own, { ...warnings, ...alarms }, SELF, NOW + 4000)
+      sink.calls = []
+      // Both holds end 2 minutes after the push-out.
+      ev.evaluate(own, warnings, SELF, NOW + 122_000)
+      const raised = sink.calls.filter(([, alert]) => alert).map(([id]) => id)
+      expect(raised.sort()).toEqual([OTHER, FOURTH].sort())
+    })
+
     it('lets go of the hold when raising it higher fails', () => {
       const { sink, ev } = pushedOut()
       const set = sink.set.bind(sink)
