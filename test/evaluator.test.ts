@@ -1313,6 +1313,52 @@ describe('Evaluator', () => {
       expect(sink.calls).toEqual([[THIRD, undefined]])
     })
 
+    it('stays held back while it is missing from the data for a moment', () => {
+      const { sink, ev } = pushedOut()
+      ev.evaluate(own, {}, SELF, NOW + 4000)
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 6000)
+      expect(sink.calls).toEqual([[THIRD, undefined]])
+    })
+
+    it('keeps the hold when raising another target fails', () => {
+      const { sink, ev } = setup({ maxAlarms: 1 })
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW)
+      const set = sink.set.bind(sink)
+      sink.set = (id: string, alert: CollisionAlert | undefined) => {
+        if (alert) {
+          throw new Error('raise failed')
+        }
+        set(id, alert)
+      }
+      // The warning is cleared for the head-on boat, whose alarm fails.
+      expect(() =>
+        ev.evaluate(own, { [OTHER]: passing, [THIRD]: headOn }, SELF, NOW + 2000)
+      ).toThrow('raise failed')
+      sink.set = set
+      sink.calls = []
+      // The head-on boat, never raised, is gone; the warning stays held back.
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 4000)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('lets go of the hold when raising it higher fails', () => {
+      const { sink, ev } = pushedOut()
+      const set = sink.set.bind(sink)
+      sink.set = (id: string, alert: CollisionAlert | undefined) => {
+        if (alert) {
+          throw new Error('raise failed')
+        }
+        set(id, alert)
+      }
+      // It turns towards us as the head-on boat goes, and its alarm fails.
+      expect(() => ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 4000)).toThrow('raise failed')
+      sink.set = set
+      sink.calls = []
+      // Back to a warning, it keeps its place.
+      ev.evaluate(own, { [OTHER]: passing }, SELF, NOW + 6000)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    })
+
     it('is raised at once once it has left every zone or the range in between', () => {
       // 13 NM off, beyond the 12 NM range.
       for (const away of [wide, at(13, 0)]) {

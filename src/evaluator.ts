@@ -476,12 +476,13 @@ export class Evaluator {
       this.levels.set(c.targetId, c.level)
     }
     // A target held back keeps its hold through a moment without usable
-    // data, such as a report without a course. One that no longer has a level
-    // is no longer held back: should it raise again, that is a new risk.
+    // data, such as a report without a course or no report at all. One that
+    // no longer has a level is no longer held back: should it raise again,
+    // that is a new risk.
     const levelOf = new Map(candidates.map((c) => [c.targetId, c.level]))
     const displaced = new Map<string, { level: AlertLevel; at: number }>()
     for (const [targetId, d] of this.displaced) {
-      const kept = levelOf.has(targetId) || withoutData.has(targetId)
+      const kept = levelOf.has(targetId) || withoutData.has(targetId) || !seen.has(targetId)
       if (kept && nowMs >= d.at && nowMs - d.at < DISPLACED_HOLD) {
         displaced.set(targetId, d)
       }
@@ -499,24 +500,28 @@ export class Evaluator {
       .sort((a, b) => this.compareUrgency(a, b))
       .slice(0, this.options.maxAlarms)
     const shownIds = new Set(shown.map((c) => c.targetId))
-    // Clear displaced alarms first, so no more than maxAlarms are ever raised.
-    for (const targetId of [...this.raised]) {
-      if (!shownIds.has(targetId)) {
-        this.raised.delete(targetId)
-        this.sink.set(targetId, undefined)
-        const level = levelOf.get(targetId)
-        if (level) {
-          displaced.set(targetId, { level, at: nowMs })
-        }
+    const cleared = [...this.raised].filter((targetId) => !shownIds.has(targetId))
+    for (const targetId of cleared) {
+      const level = levelOf.get(targetId)
+      if (level) {
+        displaced.set(targetId, { level, at: nowMs })
       }
     }
+    // Raised again, it is held back no longer.
     for (const c of shown) {
-      // Raised at a higher level, it is held back no longer.
       displaced.delete(c.targetId)
-      this.raised.add(c.targetId)
-      this.sink.set(c.targetId, this.alert(c.targetId, c.node, c.level, c.result, c.target))
     }
+    // Kept before the sink is driven, which can throw.
     this.displaced = displaced
+    // Clear displaced alarms first, so no more than maxAlarms are ever raised.
+    for (const targetId of cleared) {
+      this.raised.delete(targetId)
+      this.sink.set(targetId, undefined)
+    }
+    for (const c of shown) {
+      this.sink.set(c.targetId, this.alert(c.targetId, c.node, c.level, c.result, c.target))
+      this.raised.add(c.targetId)
+    }
     return evaluations
   }
 
