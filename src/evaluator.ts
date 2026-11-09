@@ -241,8 +241,8 @@ export class Evaluator {
   private slowTargets = new Set<string>()
   /** When each overtaken target last had usable data, ms since the epoch. */
   private overtakenTargets = new Map<string, number>()
-  /** The zone set each target was judged by at the last evaluation. */
-  private zoneSets = new Map<string, number>()
+  /** The zone sets each target has been judged by since its level was raised. */
+  private zoneSets = new Map<string, ReadonlySet<number>>()
   /** Time each overtaken target without a level has spent in a zone, net (ms), and when it was last judged. */
   private overtakenInZone = new Map<string, { net: number; at: number }>()
   private asternTargets = new Set<string>()
@@ -293,7 +293,7 @@ export class Evaluator {
     const ownStopped = own !== null && own.sog === 0 && this.options.slowSpeed > 0
     const slowTargets = new Set<string>()
     const overtakenTargets = new Map<string, number>()
-    const zoneSets = new Map<string, number>()
+    const zoneSets = new Map<string, ReadonlySet<number>>()
     const overtakenInZone = new Map<string, { net: number; at: number }>()
     const asternTargets = new Set<string>()
     const keepingDistanceSince = new Map<string, number>()
@@ -383,17 +383,7 @@ export class Evaluator {
         harbourTraffic && current === undefined && target.sog >= this.options.slowSpeed
       const slow = (ownSlow && targetSlow && !leftSlow) || (stopped && this.options.slowSpeed > 0)
       const judgedBy = slow ? SLOW_SET : overtaken || harbourTraffic ? CUT_SET : NORMAL_SET
-      let zoneSet = judgedBy
-      // A raised level keeps the strictest zones it was judged by until it
-      // clears: speed noise near a threshold would otherwise swap the zones
-      // every few updates, clearing the alarm and raising it anew, each time
-      // with sound.
-      const previous = this.zoneSets.get(targetId)
-      if (current !== undefined && previous !== undefined && previous > zoneSet) {
-        zoneSet = previous
-      }
-      zoneSets.set(targetId, zoneSet)
-      const zones = this.zonesOf(zoneSet)
+      const zones = this.zonesOf(judgedBy)
       // A target crossing behind us is no threat unless it comes really close,
       // so it raises nothing while its CPA stays outside the innermost zone's
       // distance. One that will come that close, such as a ship overtaking
@@ -423,16 +413,24 @@ export class Evaluator {
       const judgedTcpa =
         !result.keepingDistance && target.sog > 0 && tcpa < 0 && tcpa > -carried ? 0 : tcpa
       let level = passesWideAstern ? undefined : assess(zones, result.cpa, judgedTcpa, current)
-      // Custom zones can be laxer than the slow ones in places, so the zones
-      // held for a raised level don't stop the ones it would be judged by now
-      // from raising it further.
-      if (zoneSet !== judgedBy) {
-        const now = assess(this.zonesOf(judgedBy), result.cpa, judgedTcpa, current)
-        if (now && (!level || SEVERITY[now] > SEVERITY[level])) {
-          level = now
+      // A raised level is judged by every zone set it has been judged by since
+      // it was raised, until it clears: speed noise near a threshold would
+      // otherwise swap the zones every few updates, clearing the alarm and
+      // raising it anew, each time with sound. Custom zones need not be
+      // stricter in one set than in another, so it takes the highest level
+      // any of them gives.
+      const judgedSets = new Set(current !== undefined ? this.zoneSets.get(targetId) : undefined)
+      judgedSets.add(judgedBy)
+      for (const set of judgedSets) {
+        if (set !== judgedBy) {
+          const held = assess(this.zonesOf(set), result.cpa, judgedTcpa, current)
+          if (held && (!level || SEVERITY[held] > SEVERITY[level])) {
+            level = held
+          }
         }
       }
-      if (current === undefined && overtaken && zoneSet === CUT_SET) {
+      zoneSets.set(targetId, judgedSets)
+      if (current === undefined && overtaken && judgedBy === CUT_SET) {
         // An evaluation counts for no more than the time since the one
         // before, so a gap in this boat's data adds little.
         const before = this.overtakenInZone.get(targetId)

@@ -604,6 +604,52 @@ describe('Evaluator', () => {
       expect(levels(sink)).toEqual(['warn', 'warn', 'warn', 'warn'])
     })
 
+    it('keeps a warning raised by the slow zones that the zones it is judged by now lack', () => {
+      // Custom limits with an alarm only, which cut to 50 m.
+      const zones = [{ level: 'alarm' as const, cpa: 185, tcpa: 180 }]
+      const { sink, ev } = setup({ slowSpeed: 1.5, zones })
+      // CPA 80 m in 4 min, a Harbour warning.
+      ev.evaluate(stopped, { [OTHER]: southbound(240 * 1.4, 80, 1.4) }, SELF, NOW)
+      // At 1.8 m/s, past the release margin, the cut limits give it nothing,
+      // and the Harbour limits hold it, 110 m off by their margin.
+      ev.evaluate(stopped, { [OTHER]: southbound(238 * 1.8, 110, 1.8) }, SELF, NOW + 2000)
+      ev.evaluate(stopped, { [OTHER]: southbound(236 * 1.8, 80, 1.8) }, SELF, NOW + 4000)
+      // Inside 3 min it alarms by the limits it is judged by now.
+      ev.evaluate(stopped, { [OTHER]: southbound(170 * 1.8, 40, 1.8) }, SELF, NOW + 6000)
+      expect(levels(sink)).toEqual(['warn', 'warn', 'warn', 'alarm'])
+    })
+
+    it('keeps the cut limits for a level the Harbour limits rated higher for a while', () => {
+      // Custom limits with an alert at 926 m in 12 min, which cuts to 100 m.
+      const zones = [
+        { level: 'alert' as const, cpa: 926, tcpa: 720 },
+        { level: 'alarm' as const, cpa: 463, tcpa: 360 }
+      ]
+      const { sink, ev } = setup({ slowSpeed: 1.5, zones })
+      // At 1.8 m/s, CPA 80 m in 3 min: an alert by the cut limits.
+      ev.evaluate(stopped, { [OTHER]: southbound(336, 80, 1.8) }, SELF, NOW)
+      // At 1.4 m/s, in 4 min: a Harbour warning.
+      ev.evaluate(stopped, { [OTHER]: southbound(336, 80, 1.4) }, SELF, NOW + 2000)
+      // At 0.7 m/s, in 8 min, beyond the Harbour warning's margin: the alert
+      // stands.
+      ev.evaluate(stopped, { [OTHER]: southbound(336, 80, 0.7) }, SELF, NOW + 4000)
+      expect(levels(sink)).toEqual(['alert', 'warn', 'alert'])
+    })
+
+    it('keeps the cut limits for a warning while the boat slows again', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // CPA 80 m in 4 min, a Harbour warning.
+      ev.evaluate(stopped, { [OTHER]: southbound(336, 80, 1.4) }, SELF, NOW)
+      // At 1.8 m/s, past the release margin, and back at 1.4 m/s: a warning by
+      // both.
+      ev.evaluate(stopped, { [OTHER]: southbound(336, 80, 1.8) }, SELF, NOW + 2000)
+      ev.evaluate(stopped, { [OTHER]: southbound(336, 80, 1.4) }, SELF, NOW + 4000)
+      // Slowed to 0.7 m/s, CPA in 8 min: beyond the Harbour warning's margin,
+      // inside the cut limits' 12 min.
+      ev.evaluate(stopped, { [OTHER]: southbound(336, 80, 0.7) }, SELF, NOW + 6000)
+      expect(levels(sink)).toEqual(['warn', 'warn', 'warn', 'warn'])
+    })
+
     it('keeps the Harbour limits for a boat slower than the threshold', () => {
       const { sink, ev } = setup({ slowSpeed: 1.5 })
       // 1 m/s from 600 m: CPA 0 in 10 min, beyond the Harbour limits' 5 min.
@@ -1034,6 +1080,24 @@ describe('Evaluator', () => {
       ev.evaluate(at(1.4), { [OTHER]: target }, SELF, NOW + 2000)
       ev.evaluate(at(2), { [OTHER]: target }, SELF, NOW + 4000)
       expect(levels(sink)).toEqual(['alarm', 'alarm', 'alarm'])
+    })
+
+    it('keeps the normal limits for a level the Harbour limits rated higher for a while', () => {
+      // Custom limits with a warning only.
+      const zones = [{ level: 'warn' as const, cpa: 926, tcpa: 720 }]
+      const { sink, ev } = setup({ slowSpeed: 1.5, zones })
+      const ahead = (eastM: number, sog: number) =>
+        vessel(50 + 280 / 1852 / 60, 1 + eastM / 1852 / 60 / COS50, 180, sog)
+      // We make 1 m/s. 280 m ahead and 45 m to starboard at 1.8 m/s, it warns.
+      const at1 = defined(toTrack(vessel(50, 1, 0, 1), NOW, 360))
+      ev.evaluate(at1, { [OTHER]: ahead(45, 1.8) }, SELF, NOW)
+      // At 1.4 m/s both boats are slow: CPA 45 m in 117 s, a Harbour alarm.
+      ev.evaluate(at1, { [OTHER]: ahead(45, 1.4) }, SELF, NOW + 2000)
+      // 125 m off, outside the Harbour limits, and back at 1.8 m/s: the
+      // warning stands.
+      ev.evaluate(at1, { [OTHER]: ahead(125, 1.4) }, SELF, NOW + 4000)
+      ev.evaluate(at1, { [OTHER]: ahead(125, 1.8) }, SELF, NOW + 6000)
+      expect(levels(sink)).toEqual(['warn', 'alarm', 'warn', 'warn'])
     })
 
     it('raises a held level further by the limits it is judged by now', () => {
