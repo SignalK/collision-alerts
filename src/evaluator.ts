@@ -35,8 +35,9 @@ export interface EvaluatorOptions {
   /**
    * Zones used instead of `zones` while own ship and the target are both
    * slower than `slowSpeed`, and for a stopped target. A target own ship
-   * overtakes slower than that, and a moving target slower than 6 kn while
-   * own ship is stopped, are judged by `zones` cut to these distances.
+   * overtakes slower than that, and a moving target while own ship is
+   * stopped, unless it is at 6 kn or faster and could come within these
+   * distances, are judged by `zones` cut to these distances.
    */
   slowZones: Zone[]
   /** Speed (m/s) below which `slowZones` apply; 0 turns this off. */
@@ -104,6 +105,14 @@ const MAX_DEAD_RECKONING = 60_000
 // of error in its reported course puts its closest approach beyond the cut
 // distances, and a ship heading straight for us would warn minutes late.
 const HARBOUR_TRAFFIC_SPEED = (6 * 1852) / 3600
+
+// It keeps them only while an error this large in its course (sin 3°) could
+// bring it within the cut distances, though: its closest approach less the
+// distance it still has to run to it times this. A boat passing clear of them
+// by more, such as a ferry leaving its berth abeam of us, is judged by the
+// cut zones like harbour traffic. Reported courses differ from the track
+// between AIS reports by a median of about 1°.
+const COURSE_ERROR = Math.sin((3 * Math.PI) / 180)
 
 // A raised target pushed out of the most urgent by others is cleared. Below
 // alarm level, and no higher than when it was pushed out, it is held back this
@@ -265,6 +274,8 @@ export class Evaluator {
 
   /** The normal zones with the slow zones' distances. */
   private readonly cutZones: Zone[]
+  /** The largest distance (m) of the cut zones. */
+  private readonly cutReach: number
   /** The strictest slow zones, inside which an overtaken target raises at once. */
   private readonly overtakenAtOnceZones: Zone[]
   /**
@@ -278,6 +289,7 @@ export class Evaluator {
     private readonly sink: AlarmSink
   ) {
     this.cutZones = cutDistances(options.zones, options.slowZones)
+    this.cutReach = Math.max(...this.cutZones.map((z) => z.cpa))
     const strictest = Math.max(...options.slowZones.map((z) => SEVERITY[z.level]))
     this.overtakenAtOnceZones = options.slowZones.filter((z) => SEVERITY[z.level] === strictest)
     const speed = options.slowSpeed + SLOW_RELEASE_MARGIN
@@ -388,6 +400,9 @@ export class Evaluator {
       // normal zones would, so a boat heading straight for us still warns in
       // good time.
       const harbourTraffic = ownStopped && target.sog < HARBOUR_TRAFFIC_SPEED
+      const passesClear =
+        ownStopped &&
+        result.cpa - target.sog * Math.max(0, result.tcpa) * COURSE_ERROR > this.cutReach
       const current = this.levels.get(targetId)
       // Such a boat faster than slowSpeed, with nothing raised yet, leaves the
       // slow zones at once rather than after their release margin, so one
@@ -396,7 +411,11 @@ export class Evaluator {
       const leftSlow =
         harbourTraffic && current === undefined && target.sog >= this.options.slowSpeed
       const slow = (ownSlow && targetSlow && !leftSlow) || (stopped && this.options.slowSpeed > 0)
-      const judgedBy = slow ? SLOW_SET : overtaken || harbourTraffic ? CUT_SET : NORMAL_SET
+      const judgedBy = slow
+        ? SLOW_SET
+        : overtaken || harbourTraffic || passesClear
+          ? CUT_SET
+          : NORMAL_SET
       const zones = this.zonesOf(judgedBy)
       // A target crossing behind us is no threat unless it comes really close,
       // so it raises nothing while its CPA stays outside the innermost zone's

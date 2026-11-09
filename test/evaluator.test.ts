@@ -543,18 +543,71 @@ describe('Evaluator', () => {
       expect(levels(sink)).toEqual(['warn', 'alarm'])
     })
 
-    it('keeps the normal limits for a boat at 6 kn or faster', () => {
-      // Passing 130 m off in 30 s, a Coastal alarm: at 3 m/s it raises nothing.
+    it('keeps the normal limits for a boat at 6 kn or faster while its course could bring it close', () => {
+      // Passing 130 m off in 300 s, a Coastal alarm, where 3° of course error
+      // is 50 m at 3.2 m/s: at 3 m/s it raises nothing.
       const under = setup({ slowSpeed: 1.5 })
-      under.ev.evaluate(stopped, { [OTHER]: southbound(90, 130, 3) }, SELF, NOW)
+      under.ev.evaluate(stopped, { [OTHER]: southbound(900, 130, 3) }, SELF, NOW)
       expect(under.sink.calls).toEqual([])
       // At 3.2 m/s, above 6 kn, it alarms, as at 3.088 m/s, just above, and at
       // 6 kn exactly.
       for (const sog of [3.2, 3.088, (6 * 1852) / 3600]) {
         const over = setup({ slowSpeed: 1.5 })
-        over.ev.evaluate(stopped, { [OTHER]: southbound(30 * sog, 130, sog) }, SELF, NOW)
+        over.ev.evaluate(stopped, { [OTHER]: southbound(300 * sog, 130, sog) }, SELF, NOW)
         expect(over.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
       }
+    })
+
+    it('judges a fast boat passing clear of the Harbour distances by the cut limits', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // At 3.2 m/s, 130 m off in 30 s: 3° of course error is 5 m.
+      ev.evaluate(stopped, { [OTHER]: southbound(96, 130, 3.2) }, SELF, NOW)
+      // A ferry leaving its berth at 3.4 m/s, 715 m off in 74 s: a Coastal
+      // warning, where 3° is 13 m.
+      ev.evaluate(stopped, { [OTHER]: southbound(252, 715, 3.4) }, SELF, NOW + 2000)
+      // Nearly abeam, 105 m off in 5 s, judged by where it passes.
+      ev.evaluate(stopped, { [OTHER]: southbound(17, 105, 3.4) }, SELF, NOW + 4000)
+      expect(sink.calls).toEqual([])
+    })
+
+    it('allows for 3° of error in the course of a fast boat', () => {
+      // At 10 m/s, 700 s out, 3° is 366 m: passing 450 m off it warns, 480 m
+      // off it does not.
+      const near = setup({ slowSpeed: 1.5 })
+      near.ev.evaluate(stopped, { [OTHER]: southbound(7000, 450, 10) }, SELF, NOW)
+      expect(levels(near.sink)).toEqual(['warn'])
+      const far = setup({ slowSpeed: 1.5 })
+      far.ev.evaluate(stopped, { [OTHER]: southbound(7000, 480, 10) }, SELF, NOW)
+      expect(far.sink.calls).toEqual([])
+    })
+
+    it('warns and alarms as early as the normal limits for a ship whose course is 2° off', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // At 10 m/s on a track straight for us, reporting a course 2° off it:
+      // CPA 248 m in 710 s, inside the Coastal warning's 12 min.
+      const ship = (northM: number) => vessel(50 + northM / 1852 / 60, 1, 182, 10)
+      ev.evaluate(stopped, { [OTHER]: ship(7100) }, SELF, NOW)
+      // CPA 122 m in 350 s, inside the Coastal alarm's 6 min.
+      ev.evaluate(stopped, { [OTHER]: ship(3500) }, SELF, NOW + 2000)
+      expect(levels(sink)).toEqual(['warn', 'alarm'])
+    })
+
+    it('holds a warning by the normal limits through noise in a fast boat’s course', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // At 9.8 m/s, 300 m east and 5000 m north, its reported course swinging
+      // 1° either way: CPA 213 m and 387 m in turn, clear of the Harbour
+      // distances by 3° of error only when it swings away.
+      for (let i = 0; i < 10; i++) {
+        const north = 5000 - i * 60
+        const node = vessel(
+          50 + north / 1852 / 60,
+          1 + 300 / 1852 / 60 / COS50,
+          i % 2 ? 179 : 181,
+          9.8
+        )
+        ev.evaluate(stopped, { [OTHER]: node }, SELF, NOW + i * 6000)
+      }
+      expect(levels(sink)).toEqual(Array(10).fill('warn'))
     })
 
     it('keeps the 30 s count for a boat we were overtaking', () => {

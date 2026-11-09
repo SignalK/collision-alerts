@@ -28,7 +28,7 @@ Pick an **Alert sensitivity** in the plugin settings:
 The plugin tries to alarm only when it matters:
 
 - **In harbour.** While you and another boat are both slower than 3 kn, the Harbour limits apply. A boat you pass more than 100 m off stays quiet; closer than that, even a moored one can warn, and within 50 m alarm.
-- **At your berth or at anchor.** While you are stopped, boats under 6 kn coming and going warn only within 100 m and alarm only within 50 m. Faster boats, such as ferries, keep your chosen limits.
+- **At your berth or at anchor.** While you are stopped, boats coming and going warn only within 100 m and alarm only within 50 m. A boat at 6 kn or faster raises by your chosen limits while a few degrees of error in its course could bring it that close, so a ship far off heading for you still warns in good time, while a ferry passing well clear raises nothing.
 - **Stopped boats.** A boat slower than 0.5 kn gets the Harbour limits, whatever your speed. Passing it more than 100 m off raises nothing. Heading straight for it warns about 5 minutes ahead.
 - **Dragging anchor.** A boat that seems stopped but keeps moving in a straight line counts as moving once it has dragged about 60 m. A neighbour dragging towards you then warns, by the Harbour limits, about 5 minutes before it would reach you. The same goes for your own boat.
 - **Overtaking.** A boat you slowly overtake raises only if it will pass within 100 m. One that turns into you still warns in good time.
