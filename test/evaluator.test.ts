@@ -65,7 +65,8 @@ class TestEvaluator extends Evaluator {
     own: Track | null,
     vessels: Record<string, TargetNode>,
     selfId: string,
-    nowMs: number
+    nowMs: number,
+    moored?: boolean
   ) {
     const dated = Object.entries(vessels).map(([id, node]) => [
       id,
@@ -75,7 +76,8 @@ class TestEvaluator extends Evaluator {
       own,
       Object.fromEntries(dated) as Record<string, TargetNode>,
       selfId,
-      nowMs
+      nowMs,
+      moored
     )
   }
 }
@@ -677,6 +679,43 @@ describe('Evaluator', () => {
       // From 900 m: CPA 0 in 5 min, inside the Coastal alarm's 6 min.
       ev.evaluate(stopped, { [OTHER]: southbound(900, 0, 3) }, SELF, NOW + 2000)
       expect(levels(sink)).toEqual(['warn', 'alarm'])
+    })
+
+    it('judges every boat by the Harbour limits while we lie moored', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // 4 m/s from 1800 m: CPA 0 in 450 s, a Coastal warning, beyond the
+      // Harbour limits' 5 min.
+      ev.evaluate(stopped, { [OTHER]: southbound(1800, 0, 4) }, SELF, NOW, true)
+      expect(sink.calls).toEqual([])
+      // From 1100 m: CPA 0 in 275 s, a Coastal alarm and a Harbour warning.
+      ev.evaluate(stopped, { [OTHER]: southbound(1100, 0, 4) }, SELF, NOW + 2000, true)
+      // From 400 m: CPA 0 in 100 s, a Harbour alarm.
+      ev.evaluate(stopped, { [OTHER]: southbound(400, 0, 4) }, SELF, NOW + 4000, true)
+      expect(levels(sink)).toEqual(['warn', 'alarm'])
+    })
+
+    it('alarms on dead reckoning for a fast boat while moored', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // Reported 25 s ago 700 m off at 5 m/s: CPA 0 in 140 s as reported, a
+      // Harbour warning, in 115 s carried on, a Harbour alarm. A fast boat
+      // covers too much ground to wait for its next report.
+      const report = reportedAt(southbound(700, 0, 5), NOW - 25_000)
+      ev.evaluate(stopped, { [OTHER]: report }, SELF, NOW, true)
+      expect(levels(sink)).toEqual(['alarm'])
+    })
+
+    it('keeps the normal limits while moored if we are moving', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // We make 5 m/s, its 4 m/s towards us: CPA 0 in 200 s from 1800 m, a
+      // Coastal alarm.
+      ev.evaluate(own, { [OTHER]: southbound(1800, 0, 4) }, SELF, NOW, true)
+      expect(levels(sink)).toEqual(['alarm'])
+    })
+
+    it('leaves the Harbour limits off while moored when they are turned off', () => {
+      const { sink, ev } = setup()
+      ev.evaluate(stopped, { [OTHER]: southbound(1800, 0, 4) }, SELF, NOW, true)
+      expect(levels(sink)).toEqual(['warn'])
     })
 
     it('keeps the normal limits for a boat at 6 kn or faster while its course could bring it close', () => {

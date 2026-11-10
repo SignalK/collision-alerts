@@ -133,6 +133,48 @@ describe('plugin at anchor', () => {
   })
 })
 
+describe('plugin at a berth', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  // We lie still; a boat 1400 m north heads straight for us at 5 m/s: CPA 0
+  // in 280 s, a Coastal alarm and a Harbour warning.
+  const raised = async (state: string, harbourLimitsWhenMoored = true) => {
+    const { app, notifications } = fakeApp(true)
+    vi.mocked(app.getSelfPath).mockImplementation((path: string) =>
+      path === 'navigation.state' ? { value: state } : nav(50, 0, 0)
+    )
+    vi.mocked(app.getPath).mockImplementation((path: string): unknown =>
+      path === 'vessels'
+        ? { [OTHER]: { navigation: nav(50 + 1400 / 1852 / 60, 180, 5) } }
+        : undefined
+    )
+    const plugin = createPlugin(app)
+    plugin.start({ harbourLimitsWhenMoored }, () => undefined)
+    vi.advanceTimersByTime(2000)
+    await plugin.stop()
+    return notifications.raise
+  }
+
+  it('judges a boat by the Harbour limits while moored', async () => {
+    expect(await raised('moored')).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ state: 'warn' })
+    )
+  })
+
+  it('keeps the normal limits while moored unless told to read moored as a berth', async () => {
+    expect(await raised('moored', false)).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ state: 'alarm' })
+    )
+  })
+
+  it('keeps the normal limits at anchor', async () => {
+    expect(await raised('anchored')).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ state: 'alarm' })
+    )
+  })
+})
+
 describe('plugin with sensor targets', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())

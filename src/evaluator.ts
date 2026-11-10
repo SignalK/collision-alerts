@@ -34,7 +34,8 @@ export interface EvaluatorOptions {
   zones: Zone[]
   /**
    * Zones used instead of `zones` while own ship and the target are both
-   * slower than `slowSpeed`, and for a stopped target. A target own ship
+   * slower than `slowSpeed`, for a stopped target, and for every target while
+   * own ship lies stopped at a berth. A target own ship
    * overtakes slower than that, and a moving target while own ship is
    * stopped, unless it is at 6 kn or faster and could come within these
    * distances, are judged by `zones` cut to these distances.
@@ -99,11 +100,12 @@ const OVERTAKEN_DATA_GAP = 60_000
 // turned since.
 const MAX_DEAD_RECKONING = 60_000
 
-// While own ship is stopped, a boat under way slower than this (m/s, 6 kn),
-// harbour traffic, is judged by the cut zones. A faster one keeps the normal
-// zones: within their time window it is still far off, where a degree or two
-// of error in its reported course puts its closest approach beyond the cut
-// distances, and a ship heading straight for us would warn minutes late.
+// While own ship is stopped, unless at a berth, a boat under way slower than
+// this (m/s, 6 kn), harbour traffic, is judged by the cut zones. A faster one
+// keeps the normal zones: within their time window it is still far off, where
+// a degree or two of error in its reported course puts its closest approach
+// beyond the cut distances, and a ship heading straight for us would warn
+// minutes late.
 const HARBOUR_TRAFFIC_SPEED = (6 * 1852) / 3600
 
 // It keeps them only while an error this large in its course (sin 3°) could
@@ -312,12 +314,14 @@ export class Evaluator {
   /**
    * @param own own ship, or null when its own data is missing/stale
    * @param vessels AIS vessels and sensor targets, keyed by id
+   * @param moored own ship lies moored at a berth
    */
   evaluate(
     own: Track | null,
     vessels: Record<string, TargetNode>,
     selfId: string,
-    nowMs: number
+    nowMs: number,
+    moored = false
   ): Evaluation[] {
     const evaluations: Evaluation[] = []
     const sinceLastEvaluation = nowMs - (this.lastEvaluation ?? nowMs)
@@ -325,6 +329,12 @@ export class Evaluator {
     const ownSlow = this.updateOwnSlow(own)
     // Own ship as judged after the motion and drift checks: drifting, it moves.
     const ownStopped = own !== null && own.sog === 0 && this.options.slowSpeed > 0
+    // At a berth we can keep clear of no one, and boats bound to and from
+    // their berths pass and turn a few boat lengths off, some at speed until
+    // the last moment. Every boat is judged by the slow zones, by which one
+    // heading for us still warns 5 min and alarms 2 min before its closest
+    // approach.
+    const berthed = ownStopped && moored
     const slowTargets = new Set<string>()
     const overtakenTargets = new Map<string, number>()
     const zoneSets = new Map<string, ReadonlySet<number>>()
@@ -423,7 +433,8 @@ export class Evaluator {
       // raised level stays on its zones, as below.
       const leftSlow =
         harbourTraffic && current === undefined && target.sog >= this.options.slowSpeed
-      const slow = (ownSlow && targetSlow && !leftSlow) || (stopped && this.options.slowSpeed > 0)
+      const slow =
+        berthed || (ownSlow && targetSlow && !leftSlow) || (stopped && this.options.slowSpeed > 0)
       const judgedBy = slow
         ? SLOW_SET
         : overtaken || harbourTraffic || passesClear
@@ -482,6 +493,7 @@ export class Evaluator {
       let level = judge(result.cpa, judgedTcpa)
       if (
         judgedBy === SLOW_SET &&
+        targetSlow &&
         target.sog > 0 &&
         carried * 1000 < REPORT_CONFIRM_WAIT &&
         severity(level) >= SEVERITY.alarm

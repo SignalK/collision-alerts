@@ -125,7 +125,12 @@ export default function (app: ServerAPI): Plugin {
             app.getPath('targets') as Record<string, SensorTargetNode> | undefined,
             now
           )
-          const evaluations = activeEvaluator.evaluate(own, vessels, app.selfId, now)
+          // Set by a plugin such as signalk-autostate, or by hand.
+          const state = config.harbourLimitsWhenMoored
+            ? (app.getSelfPath('navigation.state') as { value?: unknown } | undefined)
+            : undefined
+          const moored = state?.value === 'moored'
+          const evaluations = activeEvaluator.evaluate(own, vessels, app.selfId, now, moored)
           if (config.publishClosestApproach) {
             publishClosestApproach(evaluations)
           }
