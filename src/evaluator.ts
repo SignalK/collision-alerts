@@ -461,9 +461,11 @@ export class Evaluator {
       // A raised level is judged by every zone set it has been judged by since
       // it was raised, until it clears: speed noise near a threshold would
       // otherwise swap the zones every few updates, clearing the alarm and
-      // raising it anew, each time with sound. Custom zones need not be
-      // stricter in one set than in another, so it takes the highest level
-      // any of them gives.
+      // raising it anew, each time with sound. Those sets keep the level it
+      // has but never raise it, so a boat now judged by more lenient zones,
+      // such as one found to pass clear, rises only by the zones it is judged
+      // by now. Custom zones need not be stricter in one set than in another,
+      // so it takes the highest level any of them gives.
       const judgedSets = new Set(current !== undefined ? this.zoneSets.get(targetId) : undefined)
       judgedSets.add(judgedBy)
       zoneSets.set(targetId, judgedSets)
@@ -472,8 +474,9 @@ export class Evaluator {
         for (const set of judgedSets) {
           if (set !== judgedBy) {
             const held = assess(this.zonesOf(set), cpa, closestIn, current)
-            if (held && (!level || SEVERITY[held] > SEVERITY[level])) {
-              level = held
+            const kept = severity(held) > severity(current) ? current : held
+            if (severity(kept) > severity(level)) {
+              level = kept
             }
           }
         }

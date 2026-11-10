@@ -313,18 +313,18 @@ describe('a boat judged by the Harbour limits between its reports', () => {
     expect(levels(sink)).toEqual(['warn', 'warn', 'warn', 'alarm'])
   })
 
-  it('alarms by the zones a level was raised by, as reported', () => {
+  it('raises no alarm by the zones a warning was raised by', () => {
     const { sink, ev } = setup({ slowSpeed: 1.5 })
     // At 2 m/s we close on it at 3 m/s: CPA 300 m in 667 s, a Coastal warning.
     const fast = defined(toTrack(vessel(50, 1, 0, 2), NOW, 360))
     ev.evaluate(fast, { [OTHER]: at(2000, 300, 180, 1) }, SELF, NOW)
     // We slow to 1 m/s, both below the threshold. Reported 20 s ago, it closes
     // at 2 m/s: CPA 300 m in 330 s as reported, in 310 s carried on, a
-    // Coastal alarm both ways.
+    // Coastal alarm both ways, but nothing by the Harbour limits.
     const slow = defined(toTrack(vessel(50, 1, 0, 1), NOW + 2000, 360))
     const report = reportedAt(at(640, 300, 180, 1), NOW - 18_000)
     ev.evaluate(slow, { [OTHER]: report }, SELF, NOW + 2000)
-    expect(levels(sink)).toEqual(['warn', 'alarm'])
+    expect(levels(sink)).toEqual(['warn', 'warn'])
   })
 
   it('never lowers an alarm it already has', () => {
@@ -692,6 +692,31 @@ describe('Evaluator', () => {
         over.ev.evaluate(stopped, { [OTHER]: southbound(300 * sog, 130, sog) }, SELF, NOW)
         expect(over.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
       }
+    })
+
+    it('raises a warned fast boat found to pass clear no higher by the normal limits', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // At 4 m/s, 150 m off in 500 s: 3° of course error is 105 m, so the
+      // Coastal limits warn.
+      ev.evaluate(stopped, { [OTHER]: southbound(2000, 150, 4) }, SELF, NOW)
+      // 300 m off in 250 s, a Coastal alarm, where 3° is 52 m: it passes clear
+      // of the Harbour distances, and the warning stands.
+      ev.evaluate(stopped, { [OTHER]: southbound(1000, 300, 4) }, SELF, NOW + 2000)
+      // 40 m off in 200 s: the Coastal limits judge it again, and it alarms.
+      ev.evaluate(stopped, { [OTHER]: southbound(800, 40, 4) }, SELF, NOW + 4000)
+      expect(levels(sink)).toEqual(['warn', 'warn', 'alarm'])
+    })
+
+    it('raises a warned boat that slows down no higher by the cut limits', () => {
+      const { sink, ev } = setup({ slowSpeed: 1.5 })
+      // At 1.8 m/s, 55 m off in 56 s: a warning by the cut limits.
+      ev.evaluate(stopped, { [OTHER]: southbound(100, 55, 1.8) }, SELF, NOW)
+      // Slowed to 0.55 m/s, 16 m off in 136 s: a cut alarm, but a Harbour
+      // warning, since its closest approach is more than 2 min away.
+      ev.evaluate(stopped, { [OTHER]: southbound(75, 16, 0.55) }, SELF, NOW + 2000)
+      // 16 m off in 109 s: a Harbour alarm.
+      ev.evaluate(stopped, { [OTHER]: southbound(60, 16, 0.55) }, SELF, NOW + 4000)
+      expect(levels(sink)).toEqual(['warn', 'warn', 'alarm'])
     })
 
     it('judges a fast boat passing clear of the Harbour distances by the cut limits', () => {
