@@ -128,8 +128,13 @@ export default function (app: ServerAPI): Plugin {
       timer = undefined
       evaluator?.stop()
       evaluator = undefined
-      closestApproach.clearAll()
-      announce(false)
+      // Sensor plugins keep their own alarms off while we announce, so the
+      // announcement must be withdrawn even if a clear fails.
+      try {
+        closestApproach.clearAll()
+      } finally {
+        announce(false)
+      }
     }
   }
 }

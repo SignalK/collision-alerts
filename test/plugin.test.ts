@@ -93,6 +93,20 @@ describe('plugin', () => {
     })
   })
 
+  it('withdraws the announcement even when a clear fails on stop', async () => {
+    const { app, handleMessage } = fakeApp(true)
+    const plugin = createPlugin(app)
+    plugin.start({}, () => undefined)
+    vi.advanceTimersByTime(2000)
+    handleMessage.mockImplementation(() => {
+      throw new Error('send failed')
+    })
+    await expect(async () => plugin.stop()).rejects.toThrow('send failed')
+    expect(app.emitPropertyValue).toHaveBeenLastCalledWith('collisionAlerts', {
+      evaluatesTargets: false
+    })
+  })
+
   it('keeps raising alarms when the server refuses the announcement', async () => {
     const { app, notifications } = fakeApp(true)
     vi.mocked(app.emitPropertyValue).mockImplementation(() => {
