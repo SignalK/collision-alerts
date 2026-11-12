@@ -51,12 +51,20 @@ export interface EvaluatorOptions {
   maxAge: number
 }
 
-export interface Evaluation {
+export type Evaluation = {
   targetId: string
   /** Context to publish `navigation.closestApproach` on. */
   context: string
-  result: CpaResult | null
-}
+} & (
+  | { result: null }
+  | {
+      result: CpaResult
+      /** The target as judged at its last report, before being carried on to now. */
+      target: Track
+      /** When its position was reported, ms since the epoch. */
+      reportedAt: number
+    }
+)
 
 // Below this speed (m/s, about 0.5 kn) a vessel is treated as stationary.
 // Boats at anchor report up to 0.4 kn with COG swinging through 200° while
@@ -380,7 +388,7 @@ export class Evaluator {
         evaluations.push({ targetId, context, result: null })
         continue
       }
-      evaluations.push({ targetId, context, result })
+      evaluations.push({ targetId, context, result, target, reportedAt: time })
 
       // A fast target keeps the normal zones even then: a ship bearing down on
       // a yacht ghosting along in light air needs the early warning.

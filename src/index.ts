@@ -2,7 +2,8 @@ import type { Context, Delta, Path, Plugin, ServerAPI } from '@signalk/server-ap
 import { DeltaAlarmSink, ManagedAlarmSink, type AlarmSink } from './alarms.js'
 import { DriftDetector } from './drift.js'
 import { MotionCheck } from './motion.js'
-import { Evaluator, positionTime, toTrack, type Evaluation, type VesselNode } from './evaluator.js'
+import { ClosestApproachPublisher } from './closestApproach.js'
+import { Evaluator, positionTime, toTrack, type VesselNode } from './evaluator.js'
 import { ConfigSchema, DEFAULTS, type Config } from './config.js'
 import { PRESETS, type Zone } from './zones.js'
 import { targetNodes, type SensorTargetNode } from './targets.js'
@@ -37,33 +38,13 @@ function createSink(app: ServerAPI): AlarmSink {
 export default function (app: ServerAPI): Plugin {
   let timer: ReturnType<typeof setInterval> | undefined
   let evaluator: Evaluator | undefined
-  // Contexts we published a closest approach on, so stop() can clear them.
-  const published = new Set<string>()
-
-  function publishClosestApproach(evaluations: Evaluation[]): void {
-    // A target the server stopped reporting has no evaluation at all, so
-    // clear what we published for it as if it had gone out of range.
-    const current = new Set(evaluations.map((e) => e.context))
-    const gone = [...published]
-      .filter((context) => !current.has(context))
-      .map((context) => ({ targetId: context, context, result: null }))
-    for (const { context, result } of [...evaluations, ...gone]) {
-      if (!result && !published.has(context)) {
-        continue
-      }
-      const value = result ? { distance: result.cpa, timeTo: result.tcpa } : null
-      if (result) {
-        published.add(context)
-      } else {
-        published.delete(context)
-      }
-      const delta: Delta = {
-        context: context as Context,
-        updates: [{ values: [{ path: 'navigation.closestApproach' as Path, value }] }]
-      }
-      app.handleMessage(PLUGIN_ID, delta)
+  const closestApproach = new ClosestApproachPublisher((context, value) => {
+    const delta: Delta = {
+      context: context as Context,
+      updates: [{ values: [{ path: 'navigation.closestApproach' as Path, value }] }]
     }
-  }
+    app.handleMessage(PLUGIN_ID, delta)
+  })
 
   // PropertyValues keep every emitted value, so emit on changes only.
   let evaluatesTargets = false
@@ -132,7 +113,7 @@ export default function (app: ServerAPI): Plugin {
           const moored = state?.value === 'moored'
           const evaluations = activeEvaluator.evaluate(own, vessels, app.selfId, now, moored)
           if (config.publishClosestApproach) {
-            publishClosestApproach(evaluations)
+            closestApproach.publish(evaluations, own, now)
           }
         } catch (err) {
           app.error(`Collision evaluation failed: ${String(err)}`)
@@ -147,8 +128,13 @@ export default function (app: ServerAPI): Plugin {
       timer = undefined
       evaluator?.stop()
       evaluator = undefined
-      publishClosestApproach([])
-      announce(false)
+      // Sensor plugins keep their own alarms off while we announce, so the
+      // announcement must be withdrawn even if a clear fails.
+      try {
+        closestApproach.clearAll()
+      } finally {
+        announce(false)
+      }
     }
   }
 }

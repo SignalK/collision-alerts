@@ -93,6 +93,20 @@ describe('plugin', () => {
     })
   })
 
+  it('withdraws the announcement even when a clear fails on stop', async () => {
+    const { app, handleMessage } = fakeApp(true)
+    const plugin = createPlugin(app)
+    plugin.start({}, () => undefined)
+    vi.advanceTimersByTime(2000)
+    handleMessage.mockImplementation(() => {
+      throw new Error('send failed')
+    })
+    await expect(async () => plugin.stop()).rejects.toThrow('send failed')
+    expect(app.emitPropertyValue).toHaveBeenLastCalledWith('collisionAlerts', {
+      evaluatesTargets: false
+    })
+  })
+
   it('keeps raising alarms when the server refuses the announcement', async () => {
     const { app, notifications } = fakeApp(true)
     vi.mocked(app.emitPropertyValue).mockImplementation(() => {
@@ -111,6 +125,34 @@ describe('plugin', () => {
     const { app } = fakeApp(true)
     await createPlugin(app).stop()
     expect(app.emitPropertyValue).not.toHaveBeenCalled()
+  })
+})
+
+describe('plugin publishing navigation.closestApproach', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('skips a target with no new report until the refresh', async () => {
+    const { app, handleMessage } = fakeApp(true)
+    // One report each, kept for every evaluation.
+    const ownNav = nav(50, 0, 5)
+    const otherNav = nav(50 + 1 / 60, 180, 5)
+    vi.mocked(app.getSelfPath).mockImplementation(() => ownNav)
+    vi.mocked(app.getPath).mockImplementation((path: string): unknown =>
+      path === 'vessels' ? { [OTHER]: { navigation: otherNav } } : undefined
+    )
+    const closestApproaches = () =>
+      handleMessage.mock.calls.filter(
+        (_, i) => sentValue(handleMessage, i).path === 'navigation.closestApproach'
+      ).length
+    const plugin = createPlugin(app)
+    plugin.start({}, () => undefined)
+    // Evaluated at 2, 4, …, 10 s: published at 2 s, refreshed at 12 s.
+    vi.advanceTimersByTime(10_000)
+    expect(closestApproaches()).toBe(1)
+    vi.advanceTimersByTime(2000)
+    expect(closestApproaches()).toBe(2)
+    await plugin.stop()
   })
 })
 
