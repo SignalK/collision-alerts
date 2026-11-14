@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { computeCpa } from '../src/cpa.js'
+import { defined } from './helpers.js'
 
 const DEG = Math.PI / 180
 const KN = 1852 / 3600
@@ -64,6 +65,49 @@ describe('computeCpa', () => {
     expect(computeCpa(own, crossing(1.4)).ahead).toBeCloseTo(0.2 * 1852, -1)
     expect(computeCpa(own, crossing(0.6)).ahead).toBeCloseTo(-0.2 * 1852, -1)
     expect(computeCpa({ ...own, sog: 0 }, crossing(0.6)).ahead).toBe(0)
+  })
+
+  it('finds where a target crosses our course line, ahead or astern', () => {
+    const own = { position: { latitude: 50, longitude: 1 }, cog: 0, sog: 5 }
+    // 1 NM west heading east at our speed: it reaches our line in 370 s, when
+    // we have made 1 NM north.
+    const crossing = (northNm: number) => ({
+      position: { latitude: 50 + northNm / 60, longitude: 1 - 1 / 60 / Math.cos(50 * DEG) },
+      cog: 90 * DEG,
+      sog: 5
+    })
+    const ahead = defined(computeCpa(own, crossing(1.4)).bowCrossing)
+    expect(ahead.distance).toBeCloseTo(0.4 * 1852, -1)
+    expect(ahead.time).toBeCloseTo(1852 / 5, 0)
+    expect(defined(computeCpa(own, crossing(0.6)).bowCrossing).distance).toBeCloseTo(
+      -0.4 * 1852,
+      -1
+    )
+  })
+
+  it('finds no crossing for a boat on a parallel course, or while we are stopped', () => {
+    const own = { position: { latitude: 50, longitude: 1 }, cog: 0, sog: 2.5 }
+    // Coming the other way 40 m to starboard, as in a channel.
+    const oncoming = {
+      position: { latitude: 50 + 500 / 111_195, longitude: 1 + 40 / 71_474 },
+      cog: 180 * DEG,
+      sog: 2.5
+    }
+    expect(computeCpa(own, oncoming).bowCrossing).toBeNull()
+    expect(computeCpa({ ...own, sog: 0 }, { ...oncoming, cog: 270 * DEG }).bowCrossing).toBeNull()
+  })
+
+  it('tells when a target already crossed', () => {
+    const own = { position: { latitude: 50, longitude: 1 }, cog: 0, sog: 5 }
+    // 200 m east of our line heading east: it crossed 100 s ago.
+    const crossed = defined(
+      computeCpa(own, {
+        position: { latitude: 50 + 1000 / 111_195, longitude: 1 + 200 / 71_474 },
+        cog: 90 * DEG,
+        sog: 2
+      }).bowCrossing
+    )
+    expect(crossed.time).toBeCloseTo(-100, 0)
   })
 
   it('reports a negative TCPA once the target has passed', () => {

@@ -2,7 +2,7 @@ import { advance, computeCpa, type CpaResult, type Track } from './cpa.js'
 import type { AlarmSink, CollisionAlert } from './alarms.js'
 import { DriftDetector } from './drift.js'
 import { MotionCheck } from './motion.js'
-import { assess, SEVERITY, type AlertLevel, type Zone } from './zones.js'
+import { assessPassage, SEVERITY, type AlertLevel, type Passage, type Zone } from './zones.js'
 
 /** The fields of a vessel node in the Signal K full data model that we read. */
 export interface VesselNode {
@@ -41,6 +41,10 @@ export interface EvaluatorOptions {
    * distances, are judged by `zones` cut to these distances.
    */
   slowZones: Zone[]
+  /** CPA (m) inside which a target that does not cross ahead raises, by `zones`. */
+  passingDistance: number
+  /** The same for `slowZones`. */
+  slowPassingDistance: number
   /** Speed (m/s) below which `slowZones` apply; 0 turns this off. */
   slowSpeed: number
   /** Most targets alarmed at once; the most urgent ones win. */
@@ -475,8 +479,15 @@ export class Evaluator {
       // holds stands, and none is raised, since that needs time still to
       // come. It ranks as passed, so it keeps no place from a boat still
       // approaching.
-      const judgedTcpa =
-        !result.keepingDistance && target.sog > 0 && tcpa < 0 && tcpa > -carried ? 0 : tcpa
+      const judgedTime = (t: number) =>
+        !result.keepingDistance && target.sog > 0 && t < 0 && t > -carried ? 0 : t
+      const judgedTcpa = judgedTime(tcpa)
+      const crossing = result.bowCrossing
+      const judged: Passage = {
+        cpa: result.cpa,
+        tcpa: judgedTcpa,
+        bowCrossing: crossing && { ...crossing, time: judgedTime(crossing.time) }
+      }
       // A raised level is judged by every zone set it has been judged by since
       // it was raised, until it clears: speed noise near a threshold would
       // otherwise swap the zones every few updates, clearing the alarm and
@@ -488,11 +499,13 @@ export class Evaluator {
       const judgedSets = new Set(current !== undefined ? this.zoneSets.get(targetId) : undefined)
       judgedSets.add(judgedBy)
       zoneSets.set(targetId, judgedSets)
-      const judge = (cpa: number, closestIn: number) => {
-        let level = passesWideAstern ? undefined : assess(zones, cpa, closestIn, current)
+      const judge = (passage: Passage) => {
+        let level = passesWideAstern
+          ? undefined
+          : assessPassage(zones, this.passingOf(judgedBy), passage, current)
         for (const set of judgedSets) {
           if (set !== judgedBy) {
-            const held = assess(this.zonesOf(set), cpa, closestIn, current)
+            const held = assessPassage(this.zonesOf(set), this.passingOf(set), passage, current)
             const kept = severity(held) > severity(current) ? current : held
             if (severity(kept) > severity(level)) {
               level = kept
@@ -501,7 +514,7 @@ export class Evaluator {
         }
         return level
       }
-      let level = judge(result.cpa, judgedTcpa)
+      let level = judge(judged)
       if (
         judgedBy === SLOW_SET &&
         targetSlow &&
@@ -511,7 +524,11 @@ export class Evaluator {
       ) {
         // At its last report, its closest approach was as close, only further
         // ahead.
-        const asReported = judge(result.cpa, tcpa + carried)
+        const asReported = judge({
+          cpa: result.cpa,
+          tcpa: tcpa + carried,
+          bowCrossing: crossing && { ...crossing, time: crossing.time + carried }
+        })
         if (severity(asReported) < severity(level)) {
           // Never below a level it has and keeps carried on.
           const kept = severity(current) < severity(level) ? current : level
@@ -527,7 +544,12 @@ export class Evaluator {
         overtakenInZone.set(targetId, { net, at: nowMs })
         if (
           net < OVERTAKEN_RAISE_DELAY &&
-          assess(this.overtakenAtOnceZones, result.cpa, judgedTcpa, undefined) === undefined
+          assessPassage(
+            this.overtakenAtOnceZones,
+            this.options.slowPassingDistance,
+            judged,
+            undefined
+          ) === undefined
         ) {
           level = undefined
         }
@@ -622,6 +644,14 @@ export class Evaluator {
       : zoneSet === CUT_SET
         ? this.cutZones
         : this.options.slowZones
+  }
+
+  private passingOf(zoneSet: number): number {
+    return zoneSet === NORMAL_SET
+      ? this.options.passingDistance
+      : zoneSet === CUT_SET
+        ? Math.min(this.options.passingDistance, this.options.slowPassingDistance)
+        : this.options.slowPassingDistance
   }
 
   private updateOwnSlow(own: Track | null): boolean {

@@ -1,8 +1,8 @@
 # Signal K Collision Alerts
 
-Warns you when another boat is on course to pass too close.
+Warns you when another boat is on course to cross your path.
 
-The plugin watches every AIS target around you, and radar or camera targets too. For each boat it works out how close it will pass and how soon. If a boat will come too close too soon, the plugin raises an alarm. Chart plotters such as Freeboard-SK show and sound it, and you can acknowledge or silence it from any app.
+The plugin watches every AIS target around you, and radar or camera targets too. For each boat it works out whether it will cross your course ahead of you, how far ahead of your bow, and how soon. If it will cross too close ahead too soon, or is heading straight for you, the plugin raises an alarm. Boats that pass on either side, as in a channel, or cross behind you stay quiet. Chart plotters such as Freeboard-SK show and sound it, and you can acknowledge or silence it from any app.
 
 ## Getting started
 
@@ -16,23 +16,25 @@ Install **Collision Alerts** from the App Store. It starts by itself with the Co
 
 Pick an **Alert sensitivity** in the plugin settings:
 
-| Sensitivity       | Warning if it will pass within | Alarm if it will pass within |
-| ----------------- | ------------------------------ | ---------------------------- |
-| Harbour           | 100 m in the next 5 min        | 50 m in the next 2 min       |
-| Coastal (default) | 0.5 NM in the next 12 min      | 0.25 NM in the next 6 min    |
-| Offshore          | 1 NM in the next 20 min        | 0.5 NM in the next 10 min    |
-| Custom            | your own limits                |                              |
+| Sensitivity       | Warning if it will cross ahead within | Alarm if it will cross ahead within | Passing distance |
+| ----------------- | ------------------------------------- | ----------------------------------- | ---------------- |
+| Harbour           | 100 m in the next 5 min               | 50 m in the next 2 min              | 15 m             |
+| Coastal (default) | 0.5 NM in the next 12 min             | 0.25 NM in the next 6 min           | 50 m             |
+| Offshore          | 1 NM in the next 20 min               | 0.5 NM in the next 10 min           | 100 m            |
+| Custom            | your own limits                       |                                     | your own         |
+
+A boat that does not cross ahead of you, or any boat while you are stopped, raises only if it will come within the passing distance, at the same times: a boat heading straight for you, or one overtaking up your wake.
 
 ## What to expect
 
 The plugin tries to alarm only when it matters:
 
-- **In harbour.** While you and another boat are both slower than 3 kn, the Harbour limits apply. A boat you pass more than 100 m off stays quiet; closer than that, even a moored one can warn, and within 50 m alarm.
-- **At your berth or at anchor.** While you are stopped, boats coming and going warn only within 100 m and alarm only within 50 m. A boat at 6 kn or faster raises by your chosen limits while a few degrees of error in its course could bring it that close, so a ship far off heading for you still warns in good time, while a ferry passing well clear raises nothing. With **Use Harbour limits for every boat while moored** on, every boat gets the Harbour limits while you are stopped and your boat's navigation state is moored, fast ones too: in a marina they slow and turn for their berths a few boat lengths off. One heading for you still warns about 5 minutes and alarms 2 minutes before its closest approach. Turn it on only if moored means lying at a berth: signalk-autostate also reports moored at anchor while no anchor position is set, on a buoy, and while drifting slowly.
-- **Stopped boats.** A boat slower than 0.5 kn gets the Harbour limits, whatever your speed. Passing it more than 100 m off raises nothing. Heading straight for it warns about 5 minutes ahead.
+- **In harbour.** While you and another boat are both slower than 3 kn, the Harbour limits apply. A boat crossing more than 100 m ahead of you stays quiet, as does one passing more than 15 m off.
+- **At your berth or at anchor.** While you are stopped, boats coming and going raise only if they will come within 15 m. A boat at 6 kn or faster raises by your chosen limits while a few degrees of error in its course could bring it that close, so a ship far off heading for you still warns in good time, while a ferry passing well clear raises nothing. With **Use Harbour limits for every boat while moored** on, every boat gets the Harbour limits while you are stopped and your boat's navigation state is moored, fast ones too: in a marina they slow and turn for their berths a few boat lengths off. One heading for you still warns about 5 minutes and alarms 2 minutes before its closest approach. Turn it on only if moored means lying at a berth: signalk-autostate also reports moored at anchor while no anchor position is set, on a buoy, and while drifting slowly.
+- **Stopped boats.** A boat slower than 0.5 kn gets the Harbour limits, whatever your speed. Passing it more than 15 m off raises nothing. Heading straight for it warns about 5 minutes ahead.
 - **Dragging anchor.** A boat that seems stopped but keeps moving in a straight line counts as moving once it has dragged about 60 m. A neighbour dragging towards you then warns, by the Harbour limits, about 5 minutes before it would reach you. The same goes for your own boat.
-- **Overtaking.** A boat you slowly overtake raises only if it will pass within 100 m. One that turns into you still warns in good time.
-- **Boats crossing behind you.** While you are under way, a boat that will cross your wake raises nothing, unless it will come within the alarm distance.
+- **Overtaking.** A boat you slowly overtake raises only if it will cross within 100 m ahead of you or pass within 15 m. One that turns into you still warns in good time.
+- **Boats crossing behind you.** While you are under way, a boat that will cross your wake raises nothing, unless it will come within the passing distance.
 - **Between AIS reports.** Small boats report only every 30 s. In between, each boat is judged where it is by now, carried on along its course for up to a minute. A boat moving slower than 3 kn, judged by the Harbour limits, alarms only once a report puts it inside the alarm limits, or once its last report is 40 s old: it may be turning into its berth. A faster boat, judged by them while you are moored with **Use Harbour limits for every boat while moored** on, alarms on dead reckoning at once.
 - **Busy waters.** At most 3 boats warn or alarm at once, the most urgent first. A warning that had to make room for a more urgent boat stays quiet for 2 minutes, unless it turns into an alarm or clears the limits and comes back.
 - **No flicker.** An alarm stays on until the boat is clearly outside the limits again.

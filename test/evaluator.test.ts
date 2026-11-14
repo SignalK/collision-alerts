@@ -10,7 +10,7 @@ import {
   type TargetNode,
   type VesselNode
 } from '../src/evaluator.js'
-import { PRESETS } from '../src/zones.js'
+import { PASSING_DISTANCE, PRESETS } from '../src/zones.js'
 import { defined } from './helpers.js'
 
 const NOW = Date.parse('2026-10-02T12:00:00Z')
@@ -88,12 +88,19 @@ const OTHER = 'urn:mrn:imo:mmsi:222222222'
 const THIRD = 'urn:mrn:imo:mmsi:333333333'
 const FOURTH = 'urn:mrn:imo:mmsi:444444444'
 
+/**
+ * Without passing distances given, every boat is judged by its CPA, as with a
+ * custom passing distance larger than every zone: most tests here are about
+ * the other rules, which hold for either kind of passing.
+ */
 function setup(options: Partial<EvaluatorOptions> = {}) {
   const sink = new RecordingSink()
   const ev = new TestEvaluator(
     {
       zones: PRESETS.coastal,
       slowZones: PRESETS.harbour,
+      passingDistance: Infinity,
+      slowPassingDistance: Infinity,
       slowSpeed: 0,
       maxAlarms: 3,
       maxRange: 12 * 1852,
@@ -1707,5 +1714,73 @@ describe('Evaluator', () => {
       [OTHER, undefined],
       [THIRD, expect.objectContaining({ level: 'alarm' })]
     ])
+  })
+})
+
+describe('judging boats by where they cross our course', () => {
+  const COS50 = Math.cos((50 * Math.PI) / 180)
+  const KN = 1852 / 3600
+  // `northM` north and `eastM` east of the start on `cogDeg` at `sog` m/s.
+  const at = (northM: number, eastM: number, cogDeg: number, sog: number) =>
+    vessel(50 + northM / 1852 / 60, 1 + eastM / 1852 / 60 / COS50, cogDeg, sog)
+  const ownAt = (northM: number, sog: number) => defined(toTrack(at(northM, 0, 0, sog), NOW, 360))
+  const realistic = () =>
+    setup({
+      passingDistance: PASSING_DISTANCE.coastal,
+      slowPassingDistance: PASSING_DISTANCE.harbour,
+      slowSpeed: 3 * KN
+    })
+  const levels = (sink: RecordingSink) => sink.calls.map(([, alert]) => alert?.level)
+
+  /** We head north at `sog`; a boat comes the other way `eastM` to starboard. */
+  function passOncoming(sog: number, eastM: number, fromM: number) {
+    const { sink, ev } = realistic()
+    for (let s = 0; s * sog * 2 <= fromM + 200; s += 2) {
+      const time = NOW + s * 1000
+      ev.evaluate(
+        ownAt(sog * s, sog),
+        { [OTHER]: at(fromM - sog * s, eastM, 180, sog) },
+        SELF,
+        time
+      )
+    }
+    return sink
+  }
+
+  it('stays quiet for a boat coming the other way 30 m off in a channel', () => {
+    expect(passOncoming(2.5 * KN, 30, 600).calls).toEqual([])
+  })
+
+  it('stays quiet for a boat coming the other way 60 m off at 5 kn', () => {
+    expect(passOncoming(5 * KN, 60, 1500).calls).toEqual([])
+  })
+
+  it('alarms for a boat heading for us on our course line', () => {
+    expect(levels(passOncoming(2.5 * KN, 5, 600))).toContain('alarm')
+  })
+
+  it('alarms for a boat about to cross 30 m ahead of our bow', () => {
+    const { sink, ev } = realistic()
+    // From the east at our 1.25 m/s, it reaches our course line in 100 s,
+    // 30 m ahead of where we are by then.
+    ev.evaluate(ownAt(0, 1.25), { [OTHER]: at(155, 125, 270, 1.25) }, SELF, NOW)
+    expect(levels(sink)).toEqual(['alarm'])
+  })
+
+  it('clears the alarm once the crossing boat turns parallel to us', () => {
+    const { sink, ev } = realistic()
+    ev.evaluate(ownAt(0, 1.25), { [OTHER]: at(155, 125, 270, 1.25) }, SELF, NOW)
+    ev.evaluate(ownAt(2.5, 1.25), { [OTHER]: at(157.5, 122.5, 0, 1.25) }, SELF, NOW + 2000)
+    expect(levels(sink)).toEqual(['alarm', undefined])
+  })
+
+  it('while we are stopped, alarms only for a boat that would hit us', () => {
+    const stopped = ownAt(0, 0)
+    const heading = realistic()
+    heading.ev.evaluate(stopped, { [OTHER]: at(100, 0, 180, 1) }, SELF, NOW)
+    expect(levels(heading.sink)).toEqual(['alarm'])
+    const passing = realistic()
+    passing.ev.evaluate(stopped, { [OTHER]: at(100, 30, 180, 1) }, SELF, NOW)
+    expect(passing.sink.calls).toEqual([])
   })
 })

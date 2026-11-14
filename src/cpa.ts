@@ -34,6 +34,13 @@ export interface CpaResult {
    * or moving in company; `tcpa` is then 0 for as long as that lasts.
    */
   keepingDistance: boolean
+  /**
+   * Where the target crosses own ship's course line, which moves with own
+   * ship: `distance` ahead of own ship at that moment, metres (negative
+   * astern), in `time` seconds (negative when it already crossed). Null when
+   * own ship is stopped or the target moves parallel to her course.
+   */
+  bowCrossing: { distance: number; time: number } | null
 }
 
 const EARTH_RADIUS = 6371008.8
@@ -42,6 +49,10 @@ const DEG = Math.PI / 180
 // Relative speeds below this make TCPA numerically meaningless: the two
 // tracks keep their current separation, so closest approach is "now".
 const MIN_RELATIVE_SPEED_SQ = 1e-6
+
+// Below this speed (m/s) across own ship's course a target runs parallel to
+// it, and the time to cross is numerically meaningless.
+const MIN_CROSSING_SPEED = 1e-3
 
 /**
  * Closest point of approach between two constant-velocity tracks.
@@ -77,8 +88,31 @@ export function computeCpa(own: Track, target: Track): CpaResult {
     ahead: own.sog > 0 ? cx * Math.sin(own.cog) + cy * Math.cos(own.cog) : 0,
     ownAtCpa: advance(own, tcpa),
     targetAtCpa: advance(target, tcpa),
-    keepingDistance
+    keepingDistance,
+    bowCrossing: bowCrossing(own, rx, ry, vx, vy)
   }
+}
+
+/** `rx`, `ry`: target relative to own ship (m); `vx`, `vy`: its relative velocity (m/s). */
+function bowCrossing(
+  own: Track,
+  rx: number,
+  ry: number,
+  vx: number,
+  vy: number
+): { distance: number; time: number } | null {
+  if (own.sog === 0) {
+    return null
+  }
+  const ux = Math.sin(own.cog)
+  const uy = Math.cos(own.cog)
+  // Own ship's velocity has no part across her course, so only the target's counts.
+  const across = vx * uy - vy * ux
+  if (Math.abs(across) < MIN_CROSSING_SPEED) {
+    return null
+  }
+  const time = -(rx * uy - ry * ux) / across
+  return { distance: (rx + vx * time) * ux + (ry + vy * time) * uy, time }
 }
 
 /** Where a track is after `seconds` at its course and speed. */

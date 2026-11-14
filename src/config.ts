@@ -1,5 +1,5 @@
 import { Type, type Static } from 'typebox'
-import { PRESETS } from './zones.js'
+import { PASSING_DISTANCE, PRESETS } from './zones.js'
 
 const ZoneSchema = Type.Object({
   level: Type.Enum(['alert', 'warn', 'alarm', 'emergency'], {
@@ -7,7 +7,11 @@ const ZoneSchema = Type.Object({
     title: 'Level',
     default: 'warn'
   }),
-  cpa: Type.Number({ title: 'CPA at most (m)', minimum: 0, default: 926 }),
+  cpa: Type.Number({
+    title: 'Crossing ahead of your bow within (m)',
+    minimum: 0,
+    default: 926
+  }),
   tcpa: Type.Number({ title: 'Within (s)', minimum: 0, default: 720 })
 })
 
@@ -18,12 +22,19 @@ export const ConfigSchema = Type.Object({
     type: 'string',
     title: 'Alert sensitivity',
     description:
-      'Harbour: warn at 100 m / 5 min, alarm at 50 m / 2 min. Coastal: warn at 0.5 NM / 12 min, alarm at 0.25 NM / 6 min. Offshore: warn at 1 NM / 20 min, alarm at 0.5 NM / 10 min.',
+      'A boat raises when it will cross your course ahead of your bow within a distance, or come within a passing distance of you. Boats passing on either side, or crossing behind you, stay quiet. Harbour: warn when crossing within 100 m ahead in 5 min, alarm within 50 m in 2 min, passing distance 15 m. Coastal: 0.5 NM in 12 min, 0.25 NM in 6 min, 50 m. Offshore: 1 NM in 20 min, 0.5 NM in 10 min, 100 m.',
     default: 'coastal'
   }),
   customZones: Type.Array(ZoneSchema, {
     title: 'Custom zones (used when sensitivity is Custom)',
     default: PRESETS.coastal
+  }),
+  customPassingDistance: Type.Number({
+    title: 'Passing distance (m, used when sensitivity is Custom)',
+    description:
+      'A boat that does not cross ahead of you raises only if it comes this close, within the time of a zone.',
+    minimum: 0,
+    default: PASSING_DISTANCE.coastal
   }),
   slowSpeed: Type.Number({
     title: 'Use Harbour limits when both boats are slower than (kn)',
@@ -72,6 +83,7 @@ export type Config = Static<typeof ConfigSchema>
 export const DEFAULTS: Config = {
   preset: 'coastal',
   customZones: PRESETS.coastal,
+  customPassingDistance: PASSING_DISTANCE.coastal,
   slowSpeed: 3,
   harbourLimitsWhenMoored: false,
   maxAlarms: 3,

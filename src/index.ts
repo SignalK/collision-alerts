@@ -5,7 +5,7 @@ import { MotionCheck } from './motion.js'
 import { ClosestApproachPublisher } from './closestApproach.js'
 import { Evaluator, positionTime, toTrack, type VesselNode } from './evaluator.js'
 import { ConfigSchema, DEFAULTS, type Config } from './config.js'
-import { PRESETS, type Zone } from './zones.js'
+import { PASSING_DISTANCE, PRESETS, type Zone } from './zones.js'
 import { targetNodes, type SensorTargetNode } from './targets.js'
 
 const PLUGIN_ID = 'collision-alerts'
@@ -77,6 +77,11 @@ export default function (app: ServerAPI): Plugin {
         {
           zones: zonesFor(config),
           slowZones: PRESETS.harbour,
+          passingDistance:
+            config.preset === 'custom'
+              ? config.customPassingDistance
+              : PASSING_DISTANCE[config.preset],
+          slowPassingDistance: PASSING_DISTANCE.harbour,
           slowSpeed: config.slowSpeed * KNOT,
           maxAlarms: config.maxAlarms,
           maxRange: config.maxRange * NM,

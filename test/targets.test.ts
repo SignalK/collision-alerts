@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AlarmSink, CollisionAlert } from '../src/alarms.js'
 import { Evaluator, toTrack, type VesselNode } from '../src/evaluator.js'
 import { targetNodes, type SensorTargetNode } from '../src/targets.js'
-import { PRESETS } from '../src/zones.js'
+import { PASSING_DISTANCE, PRESETS } from '../src/zones.js'
 import { defined } from './helpers.js'
 
 const NOW = Date.parse('2026-10-03T12:00:00Z')
@@ -51,6 +51,8 @@ function evaluate(vessels: Record<string, VesselNode>, targets?: Record<string, 
     {
       zones: PRESETS.coastal,
       slowZones: PRESETS.harbour,
+      passingDistance: PASSING_DISTANCE.coastal,
+      slowPassingDistance: PASSING_DISTANCE.harbour,
       slowSpeed: 0,
       maxAlarms: 3,
       maxRange: 12 * 1852,

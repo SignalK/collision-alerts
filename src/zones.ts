@@ -1,6 +1,10 @@
 export type AlertLevel = 'alert' | 'warn' | 'alarm' | 'emergency'
 
-/** A target is in a zone when its CPA is within `cpa` metres and comes within `tcpa` seconds. */
+/**
+ * A target is in a zone when it crosses own ship's course within `cpa` metres
+ * ahead of her bow, or passes her within the preset's passing distance, and
+ * does so within `tcpa` seconds.
+ */
 export interface Zone {
   level: AlertLevel
   cpa: number
@@ -25,6 +29,16 @@ export const PRESETS: Record<PresetName, Zone[]> = {
     { level: 'warn', cpa: 1 * NM, tcpa: 20 * MIN },
     { level: 'alarm', cpa: 0.5 * NM, tcpa: 10 * MIN }
   ]
+}
+
+/**
+ * A target that does not cross ahead of own ship raises only if it comes this
+ * close (m): boats passing on either side, as in a channel, are normal traffic.
+ */
+export const PASSING_DISTANCE: Record<PresetName, number> = {
+  harbour: 15,
+  coastal: 50,
+  offshore: 100
 }
 
 export const SEVERITY: Record<AlertLevel, number> = {
@@ -75,4 +89,35 @@ export function assess(
       .map((z) => z.level)
   )
   return highest([entered, held].filter((l): l is AlertLevel => l !== undefined))
+}
+
+/** How a target passes own ship, as `computeCpa` finds it. */
+export interface Passage {
+  cpa: number
+  tcpa: number
+  bowCrossing: { distance: number; time: number } | null
+}
+
+/**
+ * `assess` for a target crossing ahead of own ship by the distance it crosses
+ * ahead of her bow, and for any target by its CPA within the passing distance.
+ */
+export function assessPassage(
+  zones: Zone[],
+  passingDistance: number,
+  passage: Passage,
+  current: AlertLevel | undefined
+): AlertLevel | undefined {
+  const passingZones = zones.map((z) => ({ ...z, cpa: Math.min(z.cpa, passingDistance) }))
+  const levels = [assess(passingZones, passage.cpa, passage.tcpa, current)]
+  const crossing = passage.bowCrossing
+  if (crossing && crossing.distance > 0) {
+    levels.push(assess(zones, crossing.distance, crossing.time, current))
+  } else if (crossing && current !== undefined) {
+    // Crossing astern only holds a level: noise in a course swings a boat
+    // crossing at the bow from just ahead to just astern and back.
+    const held = assess(zones, -crossing.distance, crossing.time, current)
+    levels.push(held !== undefined && SEVERITY[held] > SEVERITY[current] ? current : held)
+  }
+  return highest(levels.filter((l): l is AlertLevel => l !== undefined))
 }
