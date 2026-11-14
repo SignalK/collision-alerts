@@ -81,12 +81,6 @@ const STATIONARY_SPEED = 0.26
 // threshold does not swap the zones, and with them the alarm, every update.
 const SLOW_RELEASE_MARGIN = 0.25
 
-// A target passes astern when, at closest approach, it lies more than 105°
-// off own ship's bow (cos 105° = -0.26), and counts as ahead again once
-// within 75°, so a target near abeam does not swap between the two.
-const ASTERN_ENTER = -0.26
-const ASTERN_LEAVE = 0.26
-
 // We come up on a boat from more than 22.5° abaft its beam (COLREG rule 13)
 // when its course points away from us within 67.5°.
 const ABAFT_BEAM = Math.cos((67.5 * Math.PI) / 180)
@@ -227,23 +221,6 @@ function isSlow(sog: number, slowSpeed: number, wasSlow: boolean): boolean {
   return slowSpeed > 0 && sog < (wasSlow ? slowSpeed + SLOW_RELEASE_MARGIN : slowSpeed)
 }
 
-function passesAstern(own: Track, result: CpaResult, wasAstern: boolean): boolean {
-  if (own.sog === 0 || result.cpa === 0) {
-    return false
-  }
-  const cosOffBow = result.ahead / result.cpa
-  return cosOffBow < (wasAstern ? ASTERN_LEAVE : ASTERN_ENTER)
-}
-
-/** CPA distance of the most severe zone, metres. */
-function innermostCpa(zones: Zone[]): number {
-  const strictest = zones.reduce<Zone | undefined>(
-    (best, z) => (best === undefined || SEVERITY[z.level] > SEVERITY[best.level] ? z : best),
-    undefined
-  )
-  return strictest?.cpa ?? 0
-}
-
 /**
  * `zones` with each distance cut to the largest distance of the slow zones at
  * the same or a stricter level (the smallest when none is that strict).
@@ -288,7 +265,6 @@ export class Evaluator {
   private zoneSets = new Map<string, ReadonlySet<number>>()
   /** Time each overtaken target without a level has spent in a zone, net (ms), and when it was last judged. */
   private overtakenInZone = new Map<string, { net: number; at: number }>()
-  private asternTargets = new Set<string>()
   /** When each target began keeping its distance, ms since the epoch. */
   private keepingDistanceSince = new Map<string, number>()
   private readonly raised = new Set<string>()
@@ -351,7 +327,6 @@ export class Evaluator {
     const overtakenTargets = new Map<string, number>()
     const zoneSets = new Map<string, ReadonlySet<number>>()
     const overtakenInZone = new Map<string, { net: number; at: number }>()
-    const asternTargets = new Set<string>()
     const keepingDistanceSince = new Map<string, number>()
     const candidates: Candidate[] = []
     const seen = new Set<string>()
@@ -453,16 +428,6 @@ export class Evaluator {
           ? CUT_SET
           : NORMAL_SET
       const zones = this.zonesOf(judgedBy)
-      // A target crossing behind us is no threat unless it comes really close,
-      // so it raises nothing while its CPA stays outside the innermost zone's
-      // distance. One that will come that close, such as a ship overtaking
-      // straight up our wake, keeps every zone and so its early warning, and
-      // a level already raised follows the normal hysteresis.
-      const astern = own !== null && passesAstern(own, result, this.asternTargets.has(targetId))
-      if (astern) {
-        asternTargets.add(targetId)
-      }
-      const passesWideAstern = astern && current === undefined && result.cpa > innermostCpa(zones)
       // Boats keeping their distance are at closest approach for as long as
       // they do, which would hold a level raised while one of them moved for
       // good. They count as having passed it when they began, so the level
@@ -507,9 +472,7 @@ export class Evaluator {
       judgedSets.add(judgedBy)
       zoneSets.set(targetId, judgedSets)
       const judge = (passage: Passage) => {
-        let level = passesWideAstern
-          ? undefined
-          : assessPassage(zones, this.passingOf(judgedBy), passage, current)
+        let level = assessPassage(zones, this.passingOf(judgedBy), passage, current)
         for (const set of judgedSets) {
           if (set !== judgedBy) {
             const held = assessPassage(this.zonesOf(set), this.passingOf(set), passage, current)
@@ -571,7 +534,6 @@ export class Evaluator {
     this.overtakenTargets = overtakenTargets
     this.zoneSets = zoneSets
     this.overtakenInZone = overtakenInZone
-    this.asternTargets = asternTargets
     this.motion.retain(seen)
     this.drift.retain(seen)
     this.levels.clear()
@@ -636,7 +598,6 @@ export class Evaluator {
     this.zoneSets.clear()
     this.lastEvaluation = undefined
     this.overtakenInZone.clear()
-    this.asternTargets.clear()
     this.keepingDistanceSince.clear()
     this.raised.clear()
     this.displaced.clear()

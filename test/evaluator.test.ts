@@ -495,7 +495,10 @@ describe('Evaluator', () => {
     })
 
     it('stays quiet when it will pass astern at the same distance', () => {
-      const { sink, ev } = setup()
+      const { sink, ev } = setup({
+        passingDistance: PASSING_DISTANCE.coastal,
+        slowPassingDistance: PASSING_DISTANCE.harbour
+      })
       // CPA 0.28 NM, 0.2 NM astern of us, in 5 min.
       ev.evaluate(own, { [OTHER]: crossing(0.6) }, SELF, NOW)
       expect(sink.calls).toHaveLength(0)
@@ -1056,12 +1059,16 @@ describe('Evaluator', () => {
       expect(at(118, 52)).toEqual([])
     })
 
-    it('does not count time passing wide astern', () => {
-      const { sink, ev } = setup({ slowSpeed: 1.5 })
+    it('does not count time passing astern outside the passing distance', () => {
+      const { sink, ev } = setup({
+        slowSpeed: 1.5,
+        passingDistance: PASSING_DISTANCE.coastal,
+        slowPassingDistance: PASSING_DISTANCE.harbour
+      })
       ev.evaluate(own, { [OTHER]: abeam() }, SELF, NOW)
       // 300 m to starboard, 80 m astern, closing on our wake at 0.75 m/s:
-      // CPA 80 m astern in 400 s, outside the 50 m that a boat passing astern
-      // must come within to raise anything.
+      // CPA 80 m astern in 400 s, outside the 15 m passing distance of the
+      // Harbour limits.
       const astern = (aftM: number) =>
         vessel(
           50 - aftM / 1852 / 60,
@@ -1071,7 +1078,7 @@ describe('Evaluator', () => {
         )
       hold(ev, astern(80), NOW + 2000, 28)
       expect(sink.calls).toEqual([])
-      // Now CPA 40 m astern in 400 s: inside, but only from now on.
+      // Now CPA 40 m astern in 400 s: still outside.
       ev.evaluate(own, { [OTHER]: astern(40) }, SELF, NOW + 32_000)
       expect(sink.calls).toEqual([])
     })
