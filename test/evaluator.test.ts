@@ -1035,6 +1035,12 @@ describe('Evaluator', () => {
       // Now CPA 40 m astern in 400 s: still outside.
       ev.evaluate(own, { [OTHER]: astern(40) }, SELF, NOW + 32_000)
       expect(sink.calls).toEqual([])
+      // CPA 10 m astern: inside, and it warns once 30 s in the zone add up,
+      // the time outside it not counted.
+      hold(ev, astern(10), NOW + 34_000, 26)
+      expect(sink.calls).toEqual([])
+      ev.evaluate(own, { [OTHER]: astern(10) }, SELF, NOW + 62_000)
+      expect(levels(sink)).toEqual(['warn'])
     })
 
     it('counts the time in the zone again after a level clears', () => {
