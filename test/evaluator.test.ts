@@ -1757,6 +1757,23 @@ describe('judging boats by where they cross our course', () => {
     expect(clear.sink.calls).toEqual([])
   })
 
+  it('while we are stopped, holds a warning through noise in a fast ship’s course', () => {
+    const { sink, ev } = realistic()
+    // At 9.8 m/s, 300 m east and 5000 m north, its reported course swinging
+    // 1° either way: CPA 213 m and 387 m in turn, within reach of 3° of
+    // error only when it swings towards us.
+    for (let i = 0; i < 10; i++) {
+      const north = 5000 - i * 60
+      ev.evaluate(
+        ownAt(0, 0),
+        { [OTHER]: at(north, 300, i % 2 ? 179 : 181, 9.8) },
+        SELF,
+        NOW + i * 6000
+      )
+    }
+    expect(levels(sink)).toEqual(Array(10).fill('warn'))
+  })
+
   it('while we are stopped, alarms only for a boat that would hit us', () => {
     const stopped = ownAt(0, 0)
     const heading = realistic()

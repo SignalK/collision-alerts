@@ -115,6 +115,12 @@ const FAST_TARGET_SPEED = (6 * 1852) / 3600
 // reports by a median of about 1°.
 const COURSE_ERROR = Math.sin((3 * Math.PI) / 180)
 
+// A raised level holds while twice that error could bring the boat close, so
+// a degree of noise either way in a course reported from far off, which moves
+// its closest approach by more than the passing distance, does not clear the
+// level and raise it again with every report.
+const HELD_COURSE_ERROR = Math.sin((6 * Math.PI) / 180)
+
 // A raised target pushed out of the most urgent by others is cleared. Below
 // alarm level, and no higher than when it was pushed out, it is held back this
 // long (ms) before it may be raised again: raised at once, it would sound
@@ -430,7 +436,13 @@ export class Evaluator {
       const crossing = result.bowCrossing
       const cpa =
         ownStopped && target.sog >= FAST_TARGET_SPEED
-          ? Math.max(0, result.cpa - target.sog * Math.max(0, tcpa) * COURSE_ERROR)
+          ? Math.max(
+              0,
+              result.cpa -
+                target.sog *
+                  Math.max(0, tcpa) *
+                  (current === undefined ? COURSE_ERROR : HELD_COURSE_ERROR)
+            )
           : result.cpa
       const judged: Passage = {
         cpa,
