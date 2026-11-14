@@ -1774,6 +1774,16 @@ describe('judging boats by where they cross our course', () => {
     expect(levels(sink)).toEqual(Array(10).fill('warn'))
   })
 
+  it('while we are stopped, raises a fast ship no higher by the error a level holds by', () => {
+    const { sink, ev } = realistic()
+    // At 9.8 m/s on 181°, 300 m east: from 5000 m a warning; from 3500 m CPA
+    // 239 m in 358 s, which 3° of error brings to 56 m, outside the 50 m alarm,
+    // and only the 6° a warning holds by brings to 0.
+    ev.evaluate(ownAt(0, 0), { [OTHER]: at(5000, 300, 181, 9.8) }, SELF, NOW)
+    ev.evaluate(ownAt(0, 0), { [OTHER]: at(3500, 300, 181, 9.8) }, SELF, NOW + 2000)
+    expect(levels(sink)).toEqual(['warn', 'warn'])
+  })
+
   it('while we are stopped, alarms only for a boat that would hit us', () => {
     const stopped = ownAt(0, 0)
     const heading = realistic()
