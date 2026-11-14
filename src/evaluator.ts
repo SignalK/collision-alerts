@@ -483,8 +483,15 @@ export class Evaluator {
         !result.keepingDistance && target.sog > 0 && t < 0 && t > -carried ? 0 : t
       const judgedTcpa = judgedTime(tcpa)
       const crossing = result.bowCrossing
+      // While we are stopped, a boat at 6 kn or faster is judged by the closest
+      // approach an error in its course could bring it to: far off, a degree
+      // or two moves a ship heading for us by more than the passing distance.
+      const cpa =
+        ownStopped && target.sog >= HARBOUR_TRAFFIC_SPEED
+          ? Math.max(0, result.cpa - target.sog * Math.max(0, tcpa) * COURSE_ERROR)
+          : result.cpa
       const judged: Passage = {
-        cpa: result.cpa,
+        cpa,
         tcpa: judgedTcpa,
         bowCrossing: crossing && { ...crossing, time: judgedTime(crossing.time) }
       }
@@ -525,7 +532,7 @@ export class Evaluator {
         // At its last report, its closest approach was as close, only further
         // ahead.
         const asReported = judge({
-          cpa: result.cpa,
+          cpa,
           tcpa: tcpa + carried,
           bowCrossing: crossing && { ...crossing, time: crossing.time + carried }
         })

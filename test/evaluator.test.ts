@@ -1774,6 +1774,22 @@ describe('judging boats by where they cross our course', () => {
     expect(levels(sink)).toEqual(['alarm', undefined])
   })
 
+  it('while we are stopped, raises for a fast ship a few degrees of course error would bring onto us', () => {
+    const stopped = ownAt(0, 0)
+    // At 10 m/s on 182°: it passes 2° off, 248 m from 7100 m out and 122 m
+    // from 3500 m out, both well within 3° of error.
+    const far = realistic()
+    far.ev.evaluate(stopped, { [OTHER]: at(7100, 0, 182, 10) }, SELF, NOW)
+    expect(levels(far.sink)).toEqual(['warn'])
+    const near = realistic()
+    near.ev.evaluate(stopped, { [OTHER]: at(3500, 0, 182, 10) }, SELF, NOW)
+    expect(levels(near.sink)).toEqual(['alarm'])
+    // Passing 1 km off, no error of 3° brings it within 50 m.
+    const clear = realistic()
+    clear.ev.evaluate(stopped, { [OTHER]: at(3000, 1000, 180, 10) }, SELF, NOW)
+    expect(clear.sink.calls).toEqual([])
+  })
+
   it('while we are stopped, alarms only for a boat that would hit us', () => {
     const stopped = ownAt(0, 0)
     const heading = realistic()
