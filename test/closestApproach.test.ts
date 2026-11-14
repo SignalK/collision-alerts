@@ -106,6 +106,22 @@ describe('ClosestApproachPublisher', () => {
     expect(send).toHaveBeenLastCalledWith(CONTEXT, expect.any(Object))
   })
 
+  it('clears a target once it has passed its closest approach', () => {
+    const { send, p } = publisher()
+    p.publish([seen()], own, NOW)
+    const opening = { ...target, cog: 0, sog: 6 }
+    p.publish([seen(opening, NOW + 2000)], own, NOW + 2000)
+    expect(send).toHaveBeenLastCalledWith(CONTEXT, null)
+    p.publish([seen(opening, NOW + 4000)], own, NOW + 4000)
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it('never publishes a target that is already past', () => {
+    const { send, p } = publisher()
+    p.publish([seen({ ...target, cog: 0, sog: 6 })], own, NOW)
+    expect(send).not.toHaveBeenCalled()
+  })
+
   it('clears a target the server stopped reporting', () => {
     const { send, p } = publisher()
     p.publish([seen()], own, NOW)

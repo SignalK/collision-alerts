@@ -42,8 +42,9 @@ function sameTrack(a: Track, b: Track): boolean {
 }
 
 /**
- * Publishes each target's closest approach when it carries something new: new
- * data on the target, a change in own course or speed, or the refresh.
+ * Publishes each target's closest approach while it is still ahead, when it
+ * carries something new: new data on the target, a change in own course or
+ * speed, or the refresh.
  */
 export class ClosestApproachPublisher {
   private readonly sent = new Map<string, Sent>()
@@ -61,7 +62,9 @@ export class ClosestApproachPublisher {
     }
     const { east, north } = velocity(own)
     for (const e of evaluations) {
-      if (!e.result) {
+      // A closest approach already passed is a point extrapolated backwards,
+      // not a distance the boats were ever apart; only the range matters now.
+      if (!e.result || e.result.tcpa < 0) {
         this.clear(e.context)
         continue
       }
