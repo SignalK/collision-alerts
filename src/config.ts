@@ -1,84 +1,153 @@
 import { Type, type Static } from 'typebox'
-import { PASSING_DISTANCE, PRESETS } from './zones.js'
+import { PASSING_DISTANCE, PRESETS, SEVERITY, type PresetName, type Zone } from './zones.js'
 
-const ZoneSchema = Type.Object({
-  level: Type.Enum(['alert', 'warn', 'alarm', 'emergency'], {
-    type: 'string',
-    title: 'Level',
-    default: 'warn'
-  }),
-  cpa: Type.Number({
-    title: 'Crossing ahead of your bow within (m)',
-    minimum: 0,
-    default: 926
-  }),
-  tcpa: Type.Number({ title: 'Within (s)', minimum: 0, default: 720 })
-})
+const MODES: PresetName[] = ['harbour', 'coastal', 'offshore']
+const MODE_NAMES: Record<PresetName, string> = {
+  harbour: 'In harbour',
+  coastal: 'Along the coast',
+  offshore: 'Offshore'
+}
+
+function zone(preset: PresetName, level: 'warn' | 'alarm'): Zone {
+  const found = PRESETS[preset].find((z) => z.level === level)
+  if (!found) throw new Error(`No ${level} zone in the ${preset} preset`)
+  return found
+}
+
+function limitsSchema(preset: PresetName) {
+  const warn = zone(preset, 'warn')
+  const alarm = zone(preset, 'alarm')
+  const number = (title: string, value: number, unit: string) =>
+    Type.Number({ title, description: `(Default: ${value} ${unit})`, minimum: 0, default: value })
+  return Type.Object(
+    {
+      warnDistance: number(
+        '• When a boat will cross ahead of you closer than X metres',
+        warn.cpa,
+        'm'
+      ),
+      warnMinutes: number('• X minutes before it crosses', warn.tcpa / 60, 'min'),
+      alarmDistance: number(
+        '• When a boat will cross ahead of you closer than X metres',
+        alarm.cpa,
+        'm'
+      ),
+      alarmMinutes: number('• X minutes before it crosses', alarm.tcpa / 60, 'min'),
+      passingDistance: number(
+        '• When a boat will pass alongside you closer than X metres',
+        PASSING_DISTANCE[preset],
+        'm'
+      )
+    },
+    // No title: the form then shows no heading over these numbers.
+    { title: '', default: defaultLimits(preset) }
+  )
+}
+
+/** One sensitivity's numbers, in metres and minutes. */
+export interface Limits {
+  warnDistance: number
+  warnMinutes: number
+  alarmDistance: number
+  alarmMinutes: number
+  passingDistance: number
+}
+const LIMIT_KEYS: (keyof Limits)[] = [
+  'warnDistance',
+  'warnMinutes',
+  'alarmDistance',
+  'alarmMinutes',
+  'passingDistance'
+]
+
+function defaultLimits(preset: PresetName): Limits {
+  const warn = zone(preset, 'warn')
+  const alarm = zone(preset, 'alarm')
+  return {
+    warnDistance: warn.cpa,
+    warnMinutes: warn.tcpa / 60,
+    alarmDistance: alarm.cpa,
+    alarmMinutes: alarm.tcpa / 60,
+    passingDistance: PASSING_DISTANCE[preset]
+  }
+}
 
 export const ConfigSchema = Type.Object({
   // A plain string enum, not a union of literals: the admin UI's form renders
   // `enum` as a dropdown but shows no control for `anyOf` of `const`s.
-  preset: Type.Enum(['harbour', 'coastal', 'offshore', 'custom'], {
+  preset: Type.Enum(MODES, {
     type: 'string',
-    title: 'Alert sensitivity',
+    title: 'Sailing area',
     description:
-      'A boat raises when it will cross your course ahead of your bow within a distance, or come within a passing distance of you. Boats passing on either side, or crossing behind you, stay quiet. Harbour: warn when crossing within 100 m ahead in 5 min, alarm within 50 m in 2 min, passing distance 15 m. Coastal: 0.5 NM in 12 min, 0.25 NM in 6 min, 50 m. Offshore: 1 NM in 20 min, 0.5 NM in 10 min, 100 m.',
+      '(There are two kinds of notification, by how serious the risk is: first a **WARNING**, then an **ALARM** when the boat comes closer. Each area has its own distances and times for both. You can change them below.)',
+    enumNames: MODES.map((m) => MODE_NAMES[m]),
     default: 'coastal'
   }),
-  customZones: Type.Array(ZoneSchema, {
-    title: 'Custom zones (used when sensitivity is Custom)',
-    default: PRESETS.coastal
+  harbour: limitsSchema('harbour'),
+  coastal: limitsSchema('coastal'),
+  offshore: limitsSchema('offshore'),
+  whileMoored: Type.Enum(['normal', 'harbour', 'silent'], {
+    type: 'string',
+    title: '• When you are moored at your berth',
+    description: '*(Your boat is stopped and the signalk-autostate plugin reports it as moored.)*',
+    enumNames: ['Alarms as usual', 'Only for boats coming straight at you', 'No alarms'],
+    default: 'normal'
   }),
-  customPassingDistance: Type.Number({
-    title: 'Passing distance (m, used when sensitivity is Custom)',
+  whileAnchored: Type.Enum(['normal', 'silent'], {
+    type: 'string',
+    title: '• When you are at anchor',
     description:
-      'A boat that does not cross ahead of you raises only if it comes this close, within the time of a zone.',
-    minimum: 0,
-    default: PASSING_DISTANCE.coastal
+      '*(Your boat is stopped and reported as anchored. Careful: with no alarms, a boat dragging onto you raises none either.)*',
+    enumNames: ['Alarms as usual', 'No alarms'],
+    default: 'normal'
+  }),
+  silentRegions: Type.Array(Type.String(), {
+    title: '• When you are inside any of these regions',
+    description:
+      '*(Regions are areas you draw on the chart in Freeboard. Draw one around each marina you use, entrance included: while you are inside it, you get no notifications, neither from your own movement nor from boats heading towards you.)*',
+    uniqueItems: true,
+    default: []
+  }),
+  pauseMinutes: Type.Number({
+    title: '• Pause button: stop all alarms for X minutes',
+    description:
+      '*(A switch in KIP, or a voice command, on* `navigation.collisionAlerts.paused`*: 1 pauses, 0 resumes. Alarms come back by themselves.)*',
+    minimum: 1,
+    default: 30
   }),
   slowSpeed: Type.Number({
-    title: 'Use Harbour limits when both boats are slower than (kn)',
-    description:
-      'A boat gets the Harbour limits while you and it are both slower than this. A boat you overtake with less than this speed between you, coming up on it from more than 22.5° abaft its beam and faster than it along its course, raises only within the Harbour distances, though as early as the normal limits once it has been inside them about 30 s, and at once inside the Harbour alarm limits; it stays overtaken until the speed between you rises half a knot above this, it is too far off for the normal limits to raise anything, or there has been no usable data on it or on your boat for more than a minute. Otherwise the boats at anchor you motor past in a harbour, or a boat you overtake 0.2 NM off, would fall inside the Coastal or Offshore limits. Boats that are stopped get the Harbour limits at any speed of yours. While you are stopped, a boat faster than this raises only within the Harbour passing distance, though as early as the normal limits; one at 6 kn or faster raises while an error of 3° in its course could bring it within that distance. Any other boat overtaking you or crossing at a fine angle keeps the normal limits, and a boat already warned or alarmed is held by the strictest limits it was judged by until it clears, though only the limits it gets now raise it further. 0 turns this off.',
+    title: '• Use the harbour distances when both boats are slower than X knots',
+    description: '*(Default: 3 kn. 0 turns this off.)*',
     minimum: 0,
     default: 3
   }),
-  whileMoored: Type.Enum(['normal', 'harbour', 'silent'], {
-    type: 'string',
-    title: 'While stopped and moored',
-    description:
-      'normal: your chosen limits. harbour: every boat gets the Harbour limits, whatever its speed (not while the speed above is 0). silent: no alarms, and raised ones clear. Read from navigation.state: signalk-autostate also reports moored at anchor with no anchor position set, on a buoy, and drifting slowly at sea.',
-    default: 'normal'
-  }),
-  noAlarmsWhenAnchored: Type.Boolean({
-    title: 'No alarms while at anchor',
-    description:
-      'Stopped and anchored: no alarms, and raised ones clear. A boat dragging onto you raises nothing either.',
-    default: false
-  }),
   maxAlarms: Type.Integer({
-    title: 'Alarm for at most this many targets at once',
-    description:
-      'Only the most urgent targets alarm: the highest level first, then the soonest closest approach. Others alarm when they become one of the most urgent. A target cleared to make room for a more urgent one is held back for 2 minutes while below alarm level, unless it reaches a higher level than it had, or leaves every zone or the range and comes back; an alarm is never held back.',
+    title: '• No more than X boats raising alarms at the same time',
+    description: '*(The most urgent ones. Default: 3)*',
     minimum: 1,
     maximum: 5,
     default: 3
   }),
   maxRange: Type.Number({
-    title: 'Ignore targets farther than (NM)',
+    title: '• Ignore boats farther away than X nautical miles',
+    description: '*(Default: 12 NM)*',
     minimum: 0,
     default: 12
   }),
-  maxAge: Type.Number({
-    title: 'Ignore target data older than (s)',
-    description:
-      'The default rides out two missed reports from an anchored Class A vessel (3 min interval) while still dropping vessels that left.',
-    minimum: 1,
-    default: 360
+  maxAgeMinutes: Type.Number({
+    title: '• Stop tracking a boat after X minutes without data from it',
+    description: '*(Default: 6 min)*',
+    minimum: 0.1,
+    default: 6
   }),
-  interval: Type.Number({ title: 'Evaluate every (s)', minimum: 1, default: 2 }),
+  interval: Type.Number({
+    title: '• Check for collision risk every X seconds',
+    description: '*(Default: 2 s)*',
+    minimum: 1,
+    default: 2
+  }),
   publishClosestApproach: Type.Boolean({
-    title: 'Publish navigation.closestApproach for each target',
+    title: "Send each boat's closest approach to chart apps such as Freeboard",
     default: true
   })
 })
@@ -89,14 +158,215 @@ export type Config = Static<typeof ConfigSchema>
 // receives `{}` for a plugin that has never been configured.
 export const DEFAULTS: Config = {
   preset: 'coastal',
-  customZones: PRESETS.coastal,
-  customPassingDistance: PASSING_DISTANCE.coastal,
-  slowSpeed: 3,
+  harbour: defaultLimits('harbour'),
+  coastal: defaultLimits('coastal'),
+  offshore: defaultLimits('offshore'),
   whileMoored: 'normal',
-  noAlarmsWhenAnchored: false,
+  whileAnchored: 'normal',
+  silentRegions: [],
+  pauseMinutes: 30,
+  slowSpeed: 3,
   maxAlarms: 3,
   maxRange: 12,
-  maxAge: 360,
+  maxAgeMinutes: 6,
   interval: 2,
   publishClosestApproach: true
+}
+
+/** The zones and passing distance the evaluator gets for a sensitivity. */
+export function limitsFor(
+  config: Config,
+  preset: PresetName = config.preset
+): { zones: Zone[]; passingDistance: number } {
+  const limits = { ...DEFAULTS[preset], ...config[preset] }
+  return {
+    zones: [
+      { level: 'warn', cpa: limits.warnDistance, tcpa: limits.warnMinutes * 60 },
+      { level: 'alarm', cpa: limits.alarmDistance, tcpa: limits.alarmMinutes * 60 }
+    ],
+    passingDistance: limits.passingDistance
+  }
+}
+
+/** Settings up to 0.8, read once and saved in the current form. */
+interface OldSettings {
+  preset?: string
+  customZones?: Zone[]
+  customPassingDistance?: number
+  harbourLimitsWhenMoored?: boolean
+  noAlarmsWhenAnchored?: boolean
+  maxAge?: number
+}
+
+/**
+ * The saved settings in the current form, or undefined if they already are.
+ * A Custom sensitivity becomes Along the coast with its numbers: the lowest
+ * level zone gives the warning, the highest the alarm. Zones in between have
+ * no place in the new settings: they are dropped and passed to `onDropped`.
+ */
+export function migrate(saved: object, onDropped?: (zones: Zone[]) => void): object | undefined {
+  const {
+    customZones,
+    customPassingDistance,
+    harbourLimitsWhenMoored,
+    noAlarmsWhenAnchored,
+    maxAge,
+    ...current
+  } = saved as OldSettings & Record<string, unknown>
+  const old = [
+    customZones,
+    customPassingDistance,
+    harbourLimitsWhenMoored,
+    noAlarmsWhenAnchored,
+    maxAge
+  ]
+  if (current.preset !== 'custom' && old.every((value) => value === undefined)) return undefined
+  const result: Record<string, unknown> = { ...current }
+  if (current.preset === 'custom') {
+    const zones = [...(customZones ?? PRESETS.coastal)].sort(
+      (a, b) => SEVERITY[a.level] - SEVERITY[b.level]
+    )
+    const warn = zones[0] ?? zone('coastal', 'warn')
+    const alarm = zones[zones.length - 1] ?? zone('coastal', 'alarm')
+    if (zones.length > 2) onDropped?.(zones.slice(1, -1))
+    result.preset = 'coastal'
+    result.coastal = {
+      warnDistance: warn.cpa,
+      warnMinutes: warn.tcpa / 60,
+      alarmDistance: alarm.cpa,
+      alarmMinutes: alarm.tcpa / 60,
+      passingDistance: customPassingDistance ?? PASSING_DISTANCE.coastal
+    }
+  }
+  if (harbourLimitsWhenMoored && current.whileMoored === undefined) {
+    result.whileMoored = 'harbour'
+  }
+  if (noAlarmsWhenAnchored && current.whileAnchored === undefined) {
+    result.whileAnchored = 'silent'
+  }
+  if (typeof maxAge === 'number' && current.maxAgeMinutes === undefined) {
+    result.maxAgeMinutes = maxAge / 60
+  }
+  return result
+}
+
+// The admin form: headings between the groups of settings, and only the
+// chosen sensitivity's numbers, right below it. The form shows the
+// description of a heading or a checkbox as plain text, without markdown.
+// A heading with no `before` goes last, right above the form's Save button.
+const HEADINGS: Record<string, { title: string; description: string; before?: keyof Config }> = {
+  area: {
+    title: 'Where do you sail? Choose your sailing area',
+    description: '',
+    before: 'preset'
+  },
+  quietTimes: {
+    title: 'When should alarms be quiet?',
+    description:
+      '(Alarms are always on unless you choose otherwise here. To silence a marina, draw it as a region in Freeboard, covering its entrance too: it will then appear here.)',
+    before: 'whileMoored'
+  },
+  advanced: {
+    title: 'Advanced settings',
+    description: '(For experienced users. Change them with care.)',
+    before: 'slowSpeed'
+  },
+  integration: {
+    title: 'Integration with other apps',
+    description: '',
+    before: 'publishClosestApproach'
+  },
+  save: {
+    title: '',
+    description: 'Remember to press Save Configuration: changes take effect only once saved.'
+  }
+}
+
+function heading(name: string): object {
+  const { title, description } = HEADINGS[name]
+  return { type: 'object', title, description, properties: {} }
+}
+
+/**
+ * The schema the admin form gets. The form appends a `dependencies` branch's
+ * fields after the others and rejects a `ui:order` naming a field it does
+ * not show, so every branch carries all the other fields too, in order, each
+ * branch its own copy: the server stores the schema as JSON, and the plugin
+ * CI rejects an object reachable twice. Hidden fields keep their values.
+ */
+export function formSchema(regions?: { enum: string[]; enumNames: string[] }): object {
+  const schema = JSON.parse(JSON.stringify(ConfigSchema)) as {
+    properties: Record<string, Record<string, unknown>>
+  }
+  const properties = schema.properties
+  for (const preset of MODES) {
+    const limits = properties[preset] as {
+      properties: Record<string, unknown>
+      required?: string[]
+    }
+    // Every number has a default, so the form need not star them as required.
+    delete limits.required
+    // The warning numbers and the alarm numbers in two titled groups.
+    const { warnDistance, warnMinutes, ...alarm } = limits.properties
+    limits.properties = {
+      warnGroup: { type: 'null', title: 'A: WARNING' },
+      warnDistance,
+      warnMinutes,
+      alarmSpace: { type: 'null', title: ' ' },
+      alarmGroup: { type: 'null', title: 'B: ALARM' },
+      ...alarm
+    }
+  }
+  if (regions) {
+    properties.silentRegions.items = { type: 'string', ...regions }
+  } else {
+    delete properties.silentRegions
+  }
+  const others: [string, unknown][] = []
+  for (const [key, value] of Object.entries(properties)) {
+    if (key === 'preset' || (MODES as string[]).includes(key)) continue
+    for (const [name, { before }] of Object.entries(HEADINGS)) {
+      if (key === before) others.push([name, heading(name)])
+    }
+    others.push([key, value])
+  }
+  for (const [name, { before }] of Object.entries(HEADINGS)) {
+    if (before === undefined) others.push([name, heading(name)])
+  }
+  return {
+    ...schema,
+    // Every setting has a default, so the form need not star any as required.
+    required: [],
+    properties: { area: heading('area'), preset: properties.preset },
+    dependencies: {
+      preset: {
+        oneOf: MODES.map((preset) => ({
+          properties: {
+            preset: { enum: [preset] },
+            [preset]: structuredClone(properties[preset]),
+            ...structuredClone(Object.fromEntries(others))
+          }
+        }))
+      }
+    }
+  }
+}
+
+/** Bold text and code in every description of the admin form. */
+export function formUiSchema(): object {
+  const markdown = { 'ui:enableMarkdownInDescription': true }
+  const ui: Record<string, object> = {}
+  for (const key of [...Object.keys(ConfigSchema.properties), ...Object.keys(HEADINGS)]) {
+    ui[key] = { ...markdown }
+  }
+  for (const preset of MODES) {
+    ui[preset] = {
+      ...markdown,
+      ...Object.fromEntries(LIMIT_KEYS.map((key) => [key, markdown]))
+    }
+  }
+  ui.silentRegions = { ...markdown, 'ui:widget': 'checkboxes' }
+  // The heading above already asks for it.
+  ui.preset = { ...markdown, 'ui:options': { label: false } }
+  return ui
 }

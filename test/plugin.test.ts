@@ -31,6 +31,7 @@ function fakeApp(managed: boolean) {
     debug: vi.fn(),
     error: vi.fn(),
     setPluginStatus: vi.fn(),
+    registerPutHandler: vi.fn(),
     savePluginOptions: vi.fn(),
     emitPropertyValue: vi.fn(),
     handleMessage: vi.fn<HandleMessage>(),
@@ -75,7 +76,8 @@ describe('plugin', () => {
     plugin.start({ publishClosestApproach: false }, () => undefined)
     vi.advanceTimersByTime(2000)
     expect(notifications.raise).not.toHaveBeenCalled()
-    expect(sentValue(handleMessage, 0).path).toBe(
+    // The first delta publishes that alarms are not paused.
+    expect(sentValue(handleMessage, 1).path).toBe(
       `notifications.navigation.closestApproach.${OTHER}`
     )
     await plugin.stop()
@@ -182,10 +184,14 @@ describe('plugin at a berth', () => {
 
   // We lie still; a boat 1400 m north heads straight for us at 5 m/s: CPA 0
   // in 280 s, a Coastal alarm and a Harbour warning.
-  const raised = async (state: string, config: object = { whileMoored: 'harbour' }) => {
+  const raised = async (
+    state: string,
+    config: object = { whileMoored: 'harbour' },
+    ownSpeed = 0
+  ) => {
     const { app, notifications } = fakeApp(true)
     vi.mocked(app.getSelfPath).mockImplementation((path: string) =>
-      path === 'navigation.state' ? { value: state } : nav(50, 0, 0)
+      path === 'navigation.state' ? { value: state } : nav(50, 0, ownSpeed)
     )
     vi.mocked(app.getPath).mockImplementation((path: string): unknown =>
       path === 'vessels'
@@ -244,14 +250,176 @@ describe('plugin at a berth', () => {
     expect(await raised('moored', { whileMoored: 'silent' })).not.toHaveBeenCalled()
   })
 
+  it('still alarms while moored and silent if we are moving', async () => {
+    expect(await raised('moored', { whileMoored: 'silent' }, 2)).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ state: 'alarm' })
+    )
+  })
+
   it('raises nothing at anchor when told so', async () => {
-    expect(await raised('anchored', { noAlarmsWhenAnchored: true })).not.toHaveBeenCalled()
+    expect(await raised('anchored', { whileAnchored: 'silent' })).not.toHaveBeenCalled()
   })
 
   it('still alarms at anchor when only moored is quiet', async () => {
     expect(await raised('anchored', { whileMoored: 'silent' })).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ state: 'alarm' })
     )
+  })
+})
+
+describe('plugin with edited limits', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  // The boat of the berth tests: CPA 0 in 280 s while we lie still.
+  const raised = async (config: object, state = 'moored') => {
+    const { app, notifications } = fakeApp(true)
+    vi.mocked(app.getSelfPath).mockImplementation((path: string) =>
+      path === 'navigation.state' ? { value: state } : nav(50, 0, 0)
+    )
+    vi.mocked(app.getPath).mockImplementation((path: string): unknown =>
+      path === 'vessels'
+        ? { [OTHER]: { navigation: nav(50 + 1400 / 1852 / 60, 180, 5) } }
+        : undefined
+    )
+    const plugin = createPlugin(app)
+    plugin.start(config, () => undefined)
+    vi.advanceTimersByTime(2000)
+    await plugin.stop()
+    return notifications.raise
+  }
+
+  it('judges by the edited zones of the chosen sensitivity', async () => {
+    const coastal = { alarmMinutes: 200 / 60 }
+    expect(await raised({ coastal })).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ state: 'warn' })
+    )
+  })
+
+  it('ignores the edited zones of another sensitivity', async () => {
+    const offshore = { warnDistance: 10, warnMinutes: 0.1 }
+    expect(await raised({ offshore })).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ state: 'alarm' })
+    )
+  })
+
+  it('uses the edited Harbour zones while moored, whatever the sensitivity', async () => {
+    const harbour = { warnMinutes: 200 / 60 }
+    expect(
+      await raised({ preset: 'offshore', harbour, whileMoored: 'harbour' })
+    ).not.toHaveBeenCalled()
+  })
+})
+
+describe('plugin in a silent region', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  // A region around own ship at 50 N 1 E; the boat of the berth tests heads
+  // for us at 5 m/s while we motor at 2 m/s.
+  const region = {
+    name: 'Home port',
+    feature: {
+      geometry: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [0.99, 49.99],
+            [1.01, 49.99],
+            [1.01, 50.01],
+            [0.99, 50.01],
+            [0.99, 49.99]
+          ]
+        ]
+      }
+    }
+  }
+  const run = async (silentRegions: string[]) => {
+    const { app, notifications } = fakeApp(true)
+    Object.assign(app, {
+      resourcesApi: { getResource: vi.fn(() => Promise.resolve(region)) }
+    })
+    vi.mocked(app.getSelfPath).mockImplementation(() => nav(50, 0, 2))
+    vi.mocked(app.getPath).mockImplementation((path: string): unknown =>
+      path === 'vessels'
+        ? { [OTHER]: { navigation: nav(50 + 1400 / 1852 / 60, 180, 5) } }
+        : undefined
+    )
+    const plugin = createPlugin(app)
+    plugin.start({ silentRegions }, () => undefined)
+    await vi.advanceTimersByTimeAsync(2000)
+    await plugin.stop()
+    return { raise: notifications.raise, status: vi.mocked(app.setPluginStatus) }
+  }
+
+  it('raises nothing while we are inside, even under way', async () => {
+    const { raise, status } = await run(['home'])
+    expect(raise).not.toHaveBeenCalled()
+    expect(status).toHaveBeenLastCalledWith('No alarms inside Home port')
+  })
+
+  it('alarms as usual with no region chosen', async () => {
+    const { raise } = await run([])
+    expect(raise).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ state: 'alarm' }))
+  })
+})
+
+describe('plugin paused', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  // The boat of the berth tests heads for us; we motor at 2 m/s.
+  const setup = () => {
+    const { app, notifications } = fakeApp(true)
+    vi.mocked(app.getSelfPath).mockImplementation(() => nav(50, 0, 2))
+    vi.mocked(app.getPath).mockImplementation((path: string): unknown =>
+      path === 'vessels'
+        ? { [OTHER]: { navigation: nav(50 + 1400 / 1852 / 60, 180, 5) } }
+        : undefined
+    )
+    const plugin = createPlugin(app)
+    plugin.start({}, () => undefined)
+    const [[context, path, handler]] = vi.mocked(app.registerPutHandler).mock.calls
+    const put = (value: unknown) => handler(context, path, value, () => undefined)
+    return { app, notifications, plugin, path, put }
+  }
+
+  it('raises nothing for the pause time after a PUT of 1, then alarms again', async () => {
+    const { app, notifications, plugin, path, put } = setup()
+    expect(path).toBe('navigation.collisionAlerts.paused')
+    expect(put(1)).toEqual({ state: 'COMPLETED', statusCode: 200 })
+    vi.advanceTimersByTime(29 * 60_000)
+    expect(notifications.raise).not.toHaveBeenCalled()
+    expect(vi.mocked(app.setPluginStatus).mock.lastCall?.[0]).toMatch(/^Paused until \d\d:\d\d$/)
+    vi.advanceTimersByTime(2 * 60_000)
+    expect(notifications.raise).toHaveBeenCalledOnce()
+    await plugin.stop()
+  })
+
+  it('resumes on a PUT of 0', async () => {
+    const { notifications, plugin, put } = setup()
+    put(1)
+    vi.advanceTimersByTime(2000)
+    put(0)
+    vi.advanceTimersByTime(2000)
+    expect(notifications.raise).toHaveBeenCalledOnce()
+    await plugin.stop()
+  })
+
+  it('clears a raised alarm at once, not at the next check', async () => {
+    const { notifications, plugin, put } = setup()
+    vi.advanceTimersByTime(2000)
+    expect(notifications.raise).toHaveBeenCalledOnce()
+    put(1)
+    expect(notifications.clear).toHaveBeenCalledOnce()
+    await plugin.stop()
+  })
+
+  it('refuses anything but 1 or 0', async () => {
+    const { plugin, put } = setup()
+    expect(put(true)).toMatchObject({ statusCode: 400 })
+    expect(put('2')).toMatchObject({ statusCode: 400 })
+    await plugin.stop()
   })
 })
 
@@ -274,6 +442,36 @@ describe('plugin with sensor targets', () => {
 })
 
 describe('config schema', () => {
+  const schemaWith = async (regions: Record<string, unknown>, chosen = ['gone']) => {
+    const { app } = fakeApp(true)
+    Object.assign(app, {
+      readPluginOptions: () => ({ configuration: { silentRegions: chosen } }),
+      resourcesApi: { listResources: vi.fn(() => Promise.resolve(regions)) }
+    })
+    const schema = createPlugin(app).schema as () => Promise<{
+      dependencies: {
+        preset: { oneOf: { properties: Record<string, { items?: unknown } | undefined> }[] }
+      }
+    }>
+    return (await schema()).dependencies.preset.oneOf.map((branch) => branch.properties)
+  }
+
+  it('offers the server regions, and keeps a chosen one that is gone', async () => {
+    for (const properties of await schemaWith({ h: { name: 'Home port' } })) {
+      expect(properties.silentRegions?.items).toEqual({
+        type: 'string',
+        enum: ['h', 'gone'],
+        enumNames: ['Home port', 'gone (not found)']
+      })
+    }
+  })
+
+  it('leaves out the region choice when the server has no regions', async () => {
+    for (const properties of await schemaWith({}, [])) {
+      expect(properties.silentRegions).toBeUndefined()
+    }
+  })
+
   it('declares the same defaults the plugin applies at runtime', async () => {
     const { ConfigSchema, DEFAULTS } = await import('../src/config.js')
     // The admin UI receives the schema as plain JSON, so compare it in that form.

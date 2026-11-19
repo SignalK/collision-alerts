@@ -730,7 +730,7 @@ describe('Evaluator', () => {
       expect(levels(sink)).toEqual(['warn'])
     })
 
-    it('raises nothing while we lie still in a state the user wants quiet', () => {
+    it('raises nothing when told to be quiet', () => {
       const { sink, ev } = setup({ slowSpeed: 1.5 })
       ev.evaluate(stopped, { [OTHER]: southbound(400, 0, 4) }, SELF, NOW, false, true)
       expect(sink.calls).toEqual([])
@@ -744,12 +744,6 @@ describe('Evaluator', () => {
         [OTHER, expect.objectContaining({ level: 'alarm' })],
         [OTHER, undefined]
       ])
-    })
-
-    it('keeps alarming in a quiet state while we are moving', () => {
-      const { sink, ev } = setup({ slowSpeed: 1.5 })
-      ev.evaluate(own, { [OTHER]: southbound(1800, 0, 4) }, SELF, NOW, false, true)
-      expect(levels(sink)).toEqual(['alarm'])
     })
 
     it('raises a warned boat that slows down no higher by the cut limits', () => {
