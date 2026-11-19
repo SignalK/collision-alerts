@@ -34,6 +34,8 @@ function fakeApp(managed: boolean) {
     registerPutHandler: vi.fn(),
     savePluginOptions: vi.fn(),
     emitPropertyValue: vi.fn(),
+    onPropertyValues: vi.fn(() => () => undefined),
+    resourcesApi: { listResources: vi.fn(() => Promise.resolve({})) },
     handleMessage: vi.fn<HandleMessage>(),
     getSelfPath: vi.fn(() => nav(50, 0, 5)),
     getPath: vi.fn((path: string): unknown =>

@@ -7,12 +7,16 @@ import { Evaluator, positionTime, toTrack, type VesselNode } from './evaluator.j
 import { DEFAULTS, formSchema, formUiSchema, limitsFor, migrate, type Config } from './config.js'
 import { targetNodes, type SensorTargetNode } from './targets.js'
 import { regionChoices, SilentRegions } from './regions.js'
+import { ChartLand } from './land.js'
 
 const PLUGIN_ID = 'collision-alerts'
 // 1 while alarms are paused, 0 otherwise; a PUT of 1 pauses, 0 resumes.
 const PAUSED_PATH = 'navigation.collisionAlerts.paused'
 // Regions change only when someone edits them in a chart plotter.
 const REGION_REFRESH_MS = 60_000
+// Charts come and go when someone installs or removes them, and when the
+// chart provider starts, which may be after us.
+const CHART_REFRESH_MS = 60_000
 const NM = 1852
 const KNOT = 1852 / 3600
 
@@ -40,6 +44,8 @@ const WATCHING = 'Watching AIS, radar and other targets'
 export default function (app: ServerAPI): Plugin {
   let timer: ReturnType<typeof setInterval> | undefined
   let regionTimer: ReturnType<typeof setInterval> | undefined
+  let chartTimer: ReturnType<typeof setInterval> | undefined
+  let chartLand: ChartLand | undefined
   // Epoch ms; kept across a restart of the plugin, not of the server.
   let pausedUntil = 0
   // The latest start()'s evaluation; a PUT runs it at once.
@@ -104,6 +110,16 @@ export default function (app: ServerAPI): Plugin {
       const maxAge = config.maxAgeMinutes * 60
       const limits = limitsFor(config)
       const harbour = limitsFor(config, 'harbour')
+      // Courses across land are told on the S-57 charts a chart provider
+      // hands out, such as signalk-charts-provider-simple; without one, none.
+      // Tiles stay at least until every course has been checked again.
+      const land = new ChartLand(app, Math.max(5000, 3 * config.interval * 1000))
+      chartLand = land
+      const refreshCharts = () => {
+        void land.refresh()
+      }
+      refreshCharts()
+      chartTimer = setInterval(refreshCharts, CHART_REFRESH_MS)
       const activeEvaluator = new Evaluator(
         {
           zones: limits.zones,
@@ -113,7 +129,8 @@ export default function (app: ServerAPI): Plugin {
           slowSpeed: config.slowSpeed * KNOT,
           maxAlarms: config.maxAlarms,
           maxRange: config.maxRange * NM,
-          maxAge
+          maxAge,
+          land
         },
         createSink(app)
       )
@@ -232,6 +249,10 @@ export default function (app: ServerAPI): Plugin {
       timer = undefined
       clearInterval(regionTimer)
       regionTimer = undefined
+      clearInterval(chartTimer)
+      chartTimer = undefined
+      chartLand?.stop()
+      chartLand = undefined
       tick = undefined
       evaluator?.stop()
       evaluator = undefined

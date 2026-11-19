@@ -31,7 +31,8 @@
       "./docs/screenshots/cpa-alarm.png"
     ],
     "recommends": [
-      "signalk-target-fusion"
+      "signalk-target-fusion",
+      "signalk-charts-provider-simple"
     ]
   },
   "files": [
@@ -44,6 +45,8 @@
     "signalk": ">=2.31.0"
   },
   "dependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
+    "pbf": "^5.1.2",
     "typebox": "^1.3.34"
   },
   "devDependencies": {

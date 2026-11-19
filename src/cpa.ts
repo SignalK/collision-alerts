@@ -86,6 +86,17 @@ export function computeCpa(own: Track, target: Track): CpaResult {
   }
 }
 
+/** The distance (m) between two tracks `seconds` from now. */
+export function separationAt(own: Track, target: Track, seconds: number): number {
+  const cosLat = Math.cos(own.position.latitude * DEG)
+  const dLon = wrapDegrees(target.position.longitude - own.position.longitude)
+  const rx = dLon * DEG * cosLat * EARTH_RADIUS
+  const ry = (target.position.latitude - own.position.latitude) * DEG * EARTH_RADIUS
+  const vx = target.sog * Math.sin(target.cog) - own.sog * Math.sin(own.cog)
+  const vy = target.sog * Math.cos(target.cog) - own.sog * Math.cos(own.cog)
+  return Math.hypot(rx + vx * seconds, ry + vy * seconds)
+}
+
 /** `rx`, `ry`: target relative to own ship (m); `vx`, `vy`: its relative velocity (m/s). */
 function bowCrossing(
   own: Track,
