@@ -1834,12 +1834,12 @@ describe('a passage that land ends', () => {
     const check = {
       boxes,
       loading: false,
-      /** Courses from here are still loading. */
-      loadingFrom: undefined as LatLon | undefined,
+      /** Courses from where this holds are still loading. */
+      loadingWhen: (() => false) as (from: LatLon) => boolean,
       calls: [] as [LatLon, LatLon][],
       landRuns(from: LatLon, to: LatLon) {
         check.calls.push([from, to])
-        if (check.loading || from === check.loadingFrom) return undefined
+        if (check.loading || check.loadingWhen(from)) return undefined
         const length = Math.hypot(
           (to.latitude - from.latitude) * METRES,
           (to.longitude - from.longitude) * METRES * Math.cos((from.latitude * Math.PI) / 180)
@@ -2050,10 +2050,10 @@ describe('a passage that land ends', () => {
     const { sink, ev } = setup({ ...passing, land })
     ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
     land.boxes = []
-    land.loadingFrom = own.position
+    land.loadingWhen = (from) => from === own.position
     ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
     land.boxes = band(north(1300), north(1400)).boxes
-    land.loadingFrom = undefined
+    land.loadingWhen = () => false
     ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 4000)
     expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
   })
@@ -2061,11 +2061,57 @@ describe('a passage that land ends', () => {
   it('keeps a stop found on one course while the other loads, past the wait', () => {
     const north = (metres: number) => 50 + metres / METRES
     const land = band(north(1100), north(1400))
-    land.loadingFrom = own.position
+    land.loadingWhen = (from) => from === own.position
     const { sink, ev } = setup({ ...passing, land })
     ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
     ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 12_000)
     expect(sink.calls).toHaveLength(0)
+  })
+
+  describe('a bow crossing after the closest approach', () => {
+    // A boat abeam to starboard, heading 350.5° at 6.1 m/s, closes to its
+    // closest approach and then crosses ahead of us. `abeam` metres off, it
+    // crosses 160 m ahead in 160 s.
+    const crossingLate = (abeam: number) => {
+      const vx = -abeam / 160
+      const cog = (Math.atan2(vx, 6) * 180) / Math.PI
+      return vessel(50, east(abeam), (cog + 360) % 360, Math.hypot(vx, 6))
+    }
+    const north = (metres: number) => 50 + metres / METRES
+
+    it('looks for land up to the crossing', () => {
+      // Closest 113 m off in 80 s, then across our bow; 200 m of land
+      // between the two, which it reaches in 93 s.
+      const late = crossingLate(160)
+      const open = setup(passing)
+      open.ev.evaluate(own, { [OTHER]: late }, SELF, NOW)
+      expect(open.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+      const land = band(north(560), north(760))
+      const { sink, ev } = setup({ ...passing, land })
+      ev.evaluate(own, { [OTHER]: late }, SELF, NOW)
+      expect(sink.calls).toHaveLength(0)
+    })
+
+    it('keeps the closest approach that comes before the land', () => {
+      // Closest 39 m off in 9 s; land stops it in 42 s, 51 m off.
+      const land = band(north(250), north(450))
+      const { sink, ev } = setup({ ...passing, land })
+      ev.evaluate(own, { [OTHER]: crossingLate(40) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+  })
+
+  it('raises no level while one course loads, though land stops the other', () => {
+    // It crosses 400 m ahead of us in 60 s; land stops us in 64 s, and its
+    // own course is still loading.
+    const crossing = vessel(50 + 700 / METRES, east(-300), 90, 5)
+    const land = band(50 + 320 / METRES, 50 + 480 / METRES)
+    land.loadingWhen = (from) => from !== own.position
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: crossing }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+    ev.evaluate(own, { [OTHER]: crossing }, SELF, NOW + 10_000)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
   })
 
   describe('far off', () => {

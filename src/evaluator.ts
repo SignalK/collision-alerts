@@ -630,22 +630,39 @@ export class Evaluator {
           kept && nowMs >= kept.at && nowMs - kept.at <= LAND_MEMORY ? kept : { at: nowMs }
         state.at = nowMs
         this.landStates.set(targetId, state)
-        const theirs = landStop(land, targetNow, result.tcpa, state.theirs)
-        const ours = landStop(land, own, result.tcpa, state.ours)
+        // A bow crossing after the closest approach still counts, so land
+        // is looked for up to whichever comes later.
+        const horizon = Math.max(result.tcpa, result.bowCrossing?.time ?? 0)
+        const theirs = landStop(land, targetNow, horizon, state.theirs)
+        const ours = landStop(land, own, horizon, state.ours)
         // Each course keeps where land stopped it until its charts say
         // otherwise.
         if (theirs !== undefined) state.theirs = theirs?.at
         if (ours !== undefined) state.ours = ours?.at
-        // A stop already found holds while the other course loads: the
-        // boats come no closer than there, if not stopped sooner.
+        // A stop already found lowers the level while the other course
+        // loads: the boats come no closer than there, if not stopped sooner.
         const stops = [theirs, ours].flatMap((stop) => (stop ? [stop.time] : []))
-        const end =
-          stops.length > 0
-            ? Math.min(...stops)
-            : theirs === undefined || ours === undefined
-              ? undefined
-              : Infinity
-        if (end === undefined) {
+        if (stops.length > 0) {
+          const end = Math.min(...stops)
+          const crossing = result.bowCrossing
+          // Past its closest approach by then, a boat came closest there.
+          const beforeLand =
+            end >= result.tcpa
+              ? levelOf(result.cpa, tcpa, crossing && crossing.time <= end ? crossing : null)
+              : levelOf(
+                  separationAt(own, targetNow, end),
+                  end,
+                  crossing && crossing.time <= end ? crossing : null
+                )
+          if (severity(beforeLand.level) < severity(level)) {
+            level = beforeLand.level
+          }
+          judged = beforeLand.judged
+          reachedTcpa = Math.min(tcpa, end)
+        }
+        // While a course loads, its land may stop the boat sooner: the level
+        // does not rise meanwhile, for a moment.
+        if (theirs === undefined || ours === undefined) {
           state.loadingSince ??= nowMs
           if (
             nowMs >= state.loadingSince &&
@@ -656,19 +673,6 @@ export class Evaluator {
           }
         } else {
           state.loadingSince = undefined
-          if (end !== Infinity) {
-            const crossing = result.bowCrossing
-            const beforeLand = levelOf(
-              separationAt(own, targetNow, end),
-              end,
-              crossing && crossing.time <= end ? crossing : null
-            )
-            if (severity(beforeLand.level) < severity(level)) {
-              level = beforeLand.level
-            }
-            judged = beforeLand.judged
-            reachedTcpa = Math.min(tcpa, end)
-          }
         }
       }
       if (current === undefined && overtaken && judgedBy === CUT_SET) {

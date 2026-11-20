@@ -341,7 +341,8 @@ describe('ChartLand', () => {
 
   it('knows no land without a chart provider, and reads the tiles once one comes', async () => {
     const { land, emit } = await chartLand({ enc })
-    expect(await runs(land, at(9.995), at(10.009))).toEqual([])
+    // At once: there is nothing to load.
+    expect(land.landRuns(at(9.995), at(10.009))).toEqual([])
     emit('provider', band())
     expectBand(await runs(land, at(9.995), at(10.009)))
     // Withdrawn, as a provider does when it stops.

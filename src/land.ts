@@ -303,6 +303,8 @@ export class ChartLand {
    * where a chart is wrong or too coarse, not behind land.
    */
   landRuns(from: LatLon, to: LatLon, now = Date.now()): LandRun[] | undefined {
+    // Without a provider no tile can come, so there is nothing to wait for.
+    if (this.providers.size === 0) return []
     // A tile that cannot be read must not stop the alarms: it shows no land.
     try {
       return this.scan(from, to, now)
