@@ -1,4 +1,11 @@
-import { advance, computeCpa, type CpaResult, type Track } from './cpa.js'
+import {
+  advance,
+  computeCpa,
+  separationAt,
+  type CpaResult,
+  type LatLon,
+  type Track
+} from './cpa.js'
 import type { AlarmSink, CollisionAlert } from './alarms.js'
 import { DriftDetector } from './drift.js'
 import { MotionCheck } from './motion.js'
@@ -30,6 +37,16 @@ export interface TargetNode extends VesselNode {
   sources?: string[]
 }
 
+/** What the charts show along a course. */
+export interface LandCheck {
+  /**
+   * The stretches of land a straight course from `from` to `to` crosses with
+   * charted water on either side, in order: where each begins and its
+   * length, metres. Undefined while the charts for it are still loading.
+   */
+  landRuns(from: LatLon, to: LatLon): { start: number; length: number }[] | undefined
+}
+
 export interface EvaluatorOptions {
   zones: Zone[]
   /**
@@ -52,6 +69,8 @@ export interface EvaluatorOptions {
   maxRange: number
   /** Data older than this (seconds) is ignored. */
   maxAge: number
+  /** Charts to tell a course to closest approach that runs across land. */
+  land?: LandCheck
 }
 
 export type Evaluation = {
@@ -137,6 +156,83 @@ const DISPLACED_HOLD = 120_000
 // below 2 kn reports only every 3 min.
 const REPORT_CONFIRM_WAIT = 40_000
 
+// A boat cannot keep a course across this much land (m), with water on
+// either side: its passage ends where its course, or ours, reaches it, and
+// it is judged anew once its course runs clear. A smaller islet, spit or
+// pier does not count, since a boat rounds it in moments.
+const LAND_BLOCKS = 150
+
+// Land within this distance (m) of where a course was last stopped, or
+// this share of the way there if more, is the same land, and stops it from
+// this length (m) on: a course swings a few degrees with every report, and
+// near a headland the land it crosses swings with it.
+const SAME_LAND = 300
+const SAME_LAND_SHARE = Math.sin((6 * Math.PI) / 180)
+const LAND_CLEARS = 50
+
+// Land stops a boat only if it also stops the courses this angle to either
+// side of its own (3°, the course error a fast boat is judged with): one
+// whose course just clips a headland may as well pass it.
+const LAND_COURSE_ERROR = Math.asin(COURSE_ERROR)
+
+// While the charts of a target's courses load, its level does not rise, for
+// no longer than this (ms).
+const LAND_WAIT = 10_000
+
+// Where land stopped a target's courses is remembered through gaps in its
+// level or data this long (ms).
+const LAND_MEMORY = 60_000
+
+/**
+ * Where land stops a track's courses: when it reaches it, s from now, and
+ * where on each course.
+ */
+export interface LandStop {
+  time: number
+  at: LatLon[]
+}
+
+function metresBetween(a: LatLon, b: LatLon): number {
+  return separationAt({ position: a, cog: 0, sog: 0 }, { position: b, cog: 0, sog: 0 }, 0)
+}
+
+const LAND_COURSES = [0, -LAND_COURSE_ERROR, LAND_COURSE_ERROR]
+
+/**
+ * Where land stops a track in the next `seconds`: land at least
+ * LAND_BLOCKS long, or LAND_CLEARS where `before` says it stopped that
+ * course last, on its course and on the courses LAND_COURSE_ERROR to
+ * either side, at the latest of their times. Null when one of them runs
+ * clear, undefined while the charts for them load.
+ */
+export function landStop(
+  land: LandCheck,
+  track: Track,
+  seconds: number,
+  before: LatLon[] | undefined
+): LandStop | null | undefined {
+  if (track.sog === 0 || seconds <= 0) return null
+  // All three are asked at once, so their charts load together.
+  const stops = LAND_COURSES.map((turn, i) => {
+    const course = { ...track, cog: track.cog + turn }
+    const runs = land.landRuns(track.position, advance(course, seconds))
+    if (!runs) return undefined
+    const last = before?.[i]
+    const run = runs.find((r) => {
+      const same =
+        last !== undefined &&
+        metresBetween(advance(course, r.start / track.sog), last) <=
+          Math.max(SAME_LAND, r.start * SAME_LAND_SHARE)
+      return r.length >= (same ? LAND_CLEARS : LAND_BLOCKS)
+    })
+    return run ? { time: run.start / track.sog, at: advance(course, run.start / track.sog) } : null
+  })
+  if (stops.includes(null)) return null
+  if (stops.includes(undefined)) return undefined
+  const found = stops as { time: number; at: LatLon }[]
+  return { time: Math.max(...found.map((s) => s.time)), at: found.map((s) => s.at) }
+}
+
 // A target already alarmed ranks as if its closest approach came this many
 // seconds sooner, so two targets of similar urgency don't take turns at the
 // last alarm slot, which would re-sound the alarm every few seconds.
@@ -147,7 +243,10 @@ interface Candidate {
   node: TargetNode
   level: AlertLevel
   result: CpaResult
-  /** Seconds to closest approach as judged: past for boats keeping their distance. */
+  /**
+   * Seconds to closest approach as judged, or to where land stops a course
+   * if sooner: past for boats keeping their distance.
+   */
   tcpa: number
   target: Track
 }
@@ -273,6 +372,15 @@ export class Evaluator {
   private readonly drift = new DriftDetector()
   /** When `evaluate` last ran, ms since the epoch. */
   private lastEvaluation: number | undefined
+  /**
+   * Per target, where land last stopped its course and ours, when the charts
+   * of the courses began loading, and when it was last judged by them, ms
+   * since the epoch.
+   */
+  private readonly landStates = new Map<
+    string,
+    { theirs?: LatLon[]; ours?: LatLon[]; loadingSince?: number; at: number }
+  >()
 
   /** The normal zones with the slow zones' distances. */
   private readonly cutZones: Zone[]
@@ -341,7 +449,8 @@ export class Evaluator {
       const reported = raw && this.motion.apply(targetId, raw, time)
       const target = reported && this.drift.apply(targetId, reported, time)
       const carried = reportAge(time, nowMs)
-      const result = own && target ? computeCpa(own, deadReckon(target, carried)) : null
+      const targetNow = target && deadReckon(target, carried)
+      const result = own && targetNow ? computeCpa(own, targetNow) : null
       const context = contextOf(targetId, node)
       if (!target || !result || result.range > this.options.maxRange) {
         if (!result) {
@@ -434,18 +543,6 @@ export class Evaluator {
       // approaching.
       const judgedTime = (t: number) =>
         !result.keepingDistance && target.sog > 0 && t < 0 && t > -carried ? 0 : t
-      const judgedTcpa = judgedTime(tcpa)
-      const crossing = result.bowCrossing
-      const courseErrorReach = (error: number) =>
-        ownStopped && target.sog >= FAST_TARGET_SPEED
-          ? Math.max(0, result.cpa - target.sog * Math.max(0, tcpa) * error)
-          : result.cpa
-      const cpa = courseErrorReach(COURSE_ERROR)
-      const judged: Passage = {
-        cpa,
-        tcpa: judgedTcpa,
-        bowCrossing: crossing && { ...crossing, time: judgedTime(crossing.time) }
-      }
       // A raised level is judged by every zone set it has been judged by since
       // it was raised, until it clears: speed noise near a threshold would
       // otherwise swap the zones every few updates, clearing the alarm and
@@ -470,32 +567,112 @@ export class Evaluator {
         }
         return level
       }
-      let level = judge(judged)
-      if (current !== undefined) {
-        const held = judge({ ...judged, cpa: courseErrorReach(HELD_COURSE_ERROR) })
-        const kept = severity(held) > severity(current) ? current : held
-        if (severity(kept) > severity(level)) {
-          level = kept
-        }
-      }
-      if (
-        judgedBy === SLOW_SET &&
-        targetSlow &&
-        target.sog > 0 &&
-        carried * 1000 < REPORT_CONFIRM_WAIT &&
-        severity(level) >= SEVERITY.alarm
-      ) {
-        // At its last report, its closest approach was as close, only further
-        // ahead.
-        const asReported = judge({
+      // The level of a passage whose closest approach is `closest` metres,
+      // `time` seconds from now, with this bow crossing.
+      const levelOf = (
+        closest: number,
+        time: number,
+        crossing: CpaResult['bowCrossing']
+      ): { level: AlertLevel | undefined; judged: Passage } => {
+        const courseErrorReach = (error: number) =>
+          ownStopped && target.sog >= FAST_TARGET_SPEED
+            ? Math.max(0, closest - target.sog * Math.max(0, time) * error)
+            : closest
+        const cpa = courseErrorReach(COURSE_ERROR)
+        const judged: Passage = {
           cpa,
-          tcpa: tcpa + carried,
-          bowCrossing: crossing && { ...crossing, time: crossing.time + carried }
-        })
-        if (severity(asReported) < severity(level)) {
-          // Never below a level it has and keeps carried on.
-          const kept = severity(current) < severity(level) ? current : level
-          level = severity(asReported) > severity(kept) ? asReported : kept
+          tcpa: judgedTime(time),
+          bowCrossing: crossing && { ...crossing, time: judgedTime(crossing.time) }
+        }
+        let level = judge(judged)
+        if (current !== undefined) {
+          const held = judge({ ...judged, cpa: courseErrorReach(HELD_COURSE_ERROR) })
+          const kept = severity(held) > severity(current) ? current : held
+          if (severity(kept) > severity(level)) {
+            level = kept
+          }
+        }
+        if (
+          judgedBy === SLOW_SET &&
+          targetSlow &&
+          target.sog > 0 &&
+          carried * 1000 < REPORT_CONFIRM_WAIT &&
+          severity(level) >= SEVERITY.alarm
+        ) {
+          // At its last report, its closest approach was as close, only
+          // further ahead.
+          const asReported = judge({
+            cpa,
+            tcpa: time + carried,
+            bowCrossing: crossing && { ...crossing, time: crossing.time + carried }
+          })
+          if (severity(asReported) < severity(level)) {
+            // Never below a level it has and keeps carried on.
+            const kept = severity(current) < severity(level) ? current : level
+            level = severity(asReported) > severity(kept) ? asReported : kept
+          }
+        }
+        return { level, judged }
+      }
+      const passage = levelOf(result.cpa, tcpa, result.bowCrossing)
+      let judged = passage.judged
+      let level = passage.level
+      // When the closest approach comes, as far as the boats can get to it.
+      let reachedTcpa = tcpa
+      const land = this.options.land
+      if (level && land && own && targetNow && !result.keepingDistance && result.tcpa > 0) {
+        // The boats come no closer than where land stops one of them, so the
+        // passage is judged only up to there: a boat that crosses our bow or
+        // comes close before it reaches the land still raises. Land only ever
+        // lowers a level.
+        const kept = this.landStates.get(targetId)
+        const state =
+          kept && nowMs >= kept.at && nowMs - kept.at <= LAND_MEMORY ? kept : { at: nowMs }
+        state.at = nowMs
+        this.landStates.set(targetId, state)
+        // A bow crossing after the closest approach still counts, so land
+        // is looked for up to whichever comes later.
+        const horizon = Math.max(result.tcpa, result.bowCrossing?.time ?? 0)
+        const theirs = landStop(land, targetNow, horizon, state.theirs)
+        const ours = landStop(land, own, horizon, state.ours)
+        // Each course keeps where land stopped it until its charts say
+        // otherwise.
+        if (theirs !== undefined) state.theirs = theirs?.at
+        if (ours !== undefined) state.ours = ours?.at
+        // A stop already found lowers the level while the other course
+        // loads: the boats come no closer than there, if not stopped sooner.
+        const stops = [theirs, ours].flatMap((stop) => (stop ? [stop.time] : []))
+        if (stops.length > 0) {
+          const end = Math.min(...stops)
+          const crossing = result.bowCrossing
+          // Past its closest approach by then, a boat came closest there.
+          const beforeLand =
+            end >= result.tcpa
+              ? levelOf(result.cpa, tcpa, crossing && crossing.time <= end ? crossing : null)
+              : levelOf(
+                  separationAt(own, targetNow, end),
+                  end,
+                  crossing && crossing.time <= end ? crossing : null
+                )
+          if (severity(beforeLand.level) < severity(level)) {
+            level = beforeLand.level
+          }
+          judged = beforeLand.judged
+          reachedTcpa = Math.min(tcpa, end)
+        }
+        // While a course loads, its land may stop the boat sooner: the level
+        // does not rise meanwhile, for a moment.
+        if (theirs === undefined || ours === undefined) {
+          state.loadingSince ??= nowMs
+          if (
+            nowMs >= state.loadingSince &&
+            nowMs - state.loadingSince < LAND_WAIT &&
+            severity(level) > severity(current)
+          ) {
+            level = current
+          }
+        } else {
+          state.loadingSince = undefined
         }
       }
       if (current === undefined && overtaken && judgedBy === CUT_SET) {
@@ -518,7 +695,7 @@ export class Evaluator {
         }
       }
       if (level && !quiet) {
-        candidates.push({ targetId, node, level, result, tcpa, target })
+        candidates.push({ targetId, node, level, result, tcpa: reachedTcpa, target })
       }
     }
 
@@ -527,6 +704,11 @@ export class Evaluator {
     this.overtakenTargets = overtakenTargets
     this.zoneSets = zoneSets
     this.overtakenInZone = overtakenInZone
+    for (const [targetId, state] of this.landStates) {
+      if (!seen.has(targetId) || nowMs - state.at > LAND_MEMORY || nowMs < state.at) {
+        this.landStates.delete(targetId)
+      }
+    }
     this.motion.retain(seen)
     this.drift.retain(seen)
     this.levels.clear()
@@ -592,6 +774,7 @@ export class Evaluator {
     this.lastEvaluation = undefined
     this.overtakenInZone.clear()
     this.keepingDistanceSince.clear()
+    this.landStates.clear()
     this.raised.clear()
     this.displaced.clear()
     this.motion.clear()

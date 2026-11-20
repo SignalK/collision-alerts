@@ -15,6 +15,13 @@ sensors raises one alarm.
 - `zones.ts` — sensitivity presets and `assess()`, the level decision with
   hysteresis.
 - `evaluator.ts` — reads the data model, keeps per-target levels, drives a sink.
+- `land.ts` — the land on S-57 charts (`LNDARE`; any chart's `DEPARE` or
+  `DRGARE` water wins), read from the tiles a chart provider plugin offers
+  through the `chartTiles` PropertyValue (signalk-charts-provider-simple), in
+  process, so it works on secured servers. `landRuns` gives the stretches of
+  land along a course with charted water on either side, from cached tiles,
+  loading missing ones in the background. The evaluator judges a passage only
+  up to where land stops either course; land never raises a level.
 - `targets.ts` — folds `targets.*` contexts (radar, camera; the server's
   sensor-targets convention) into the evaluator's input: a target with
   `sameAs` joins the context it names, the rest become objects of their own,
@@ -43,7 +50,8 @@ sensors raises one alarm.
 - **Schema defaults are not applied at runtime.** `start()` receives `{}` for a
   plugin that was never configured; always merge `DEFAULTS` under the config.
 - **No install scripts.** The app store installs with `--ignore-scripts`; keep
-  runtime dependencies pure JS (today: `typebox` only).
+  runtime dependencies pure JS (today: `typebox`, and `@mapbox/vector-tile`
+  with `pbf` to read chart tiles).
 - **ESM.** Relative imports carry the `.js` extension (nodenext module
   resolution); the entry is `export default function (app)`.
 - **Clear what you raise.** Every path that stops tracking a target (lost,

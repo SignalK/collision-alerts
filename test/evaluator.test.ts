@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { AlarmSink, CollisionAlert } from '../src/alarms.js'
-import type { Track } from '../src/cpa.js'
+import type { LatLon, Track } from '../src/cpa.js'
 import {
   deadReckon,
   Evaluator,
+  landStop,
   reportAge,
   toTrack,
   type EvaluatorOptions,
@@ -1810,5 +1811,472 @@ describe('judging boats by where they cross our course', () => {
     const passing = realistic()
     passing.ev.evaluate(stopped, { [OTHER]: at(100, 30, 180, 1) }, SELF, NOW)
     expect(passing.sink.calls).toEqual([])
+  })
+})
+
+describe('a passage that land ends', () => {
+  const METRES = (6371008.8 * Math.PI) / 180
+  // 1 NM ahead, coming straight at us: an alarm in open water.
+  const headOn = vessel(50 + 1 / 60, 1, 180, 5)
+  const passing = {
+    passingDistance: PASSING_DISTANCE.coastal,
+    slowPassingDistance: PASSING_DISTANCE.harbour
+  }
+
+  /** South, north, west, east. */
+  type Box = [number, number, number, number]
+
+  /**
+   * Charts with rectangles of land, water all round them: the stretches of
+   * each that a straight course crosses from water to water.
+   */
+  function charts(...boxes: Box[]) {
+    const check = {
+      boxes,
+      loading: false,
+      /** Courses from where this holds are still loading. */
+      loadingWhen: (() => false) as (from: LatLon) => boolean,
+      calls: [] as [LatLon, LatLon][],
+      landRuns(from: LatLon, to: LatLon) {
+        check.calls.push([from, to])
+        if (check.loading || check.loadingWhen(from)) return undefined
+        const length = Math.hypot(
+          (to.latitude - from.latitude) * METRES,
+          (to.longitude - from.longitude) * METRES * Math.cos((from.latitude * Math.PI) / 180)
+        )
+        const runs: { start: number; length: number }[] = []
+        for (const [south, north, west, east] of check.boxes) {
+          // Where the course is inside the box, as fractions of it.
+          let enter = 0
+          let leave = 1
+          for (const [p, d, low, high] of [
+            [from.latitude, to.latitude - from.latitude, south, north],
+            [from.longitude, to.longitude - from.longitude, west, east]
+          ]) {
+            if (d === 0) {
+              if (p < low || p > high) leave = -1
+              continue
+            }
+            const t1 = (low - p) / d
+            const t2 = (high - p) / d
+            enter = Math.max(enter, Math.min(t1, t2))
+            leave = Math.min(leave, Math.max(t1, t2))
+          }
+          if (enter > 0 && leave < 1 && leave > enter) {
+            runs.push({ start: enter * length, length: (leave - enter) * length })
+          }
+        }
+        return runs.sort((x, y) => x.start - y.start)
+      }
+    }
+    return check
+  }
+
+  /** Land between two parallels, right across the chart. */
+  const band = (south: number, north: number) => charts([south, north, -180, 180])
+
+  /** Land between two meridians, right across the chart. */
+  const wall = (west: number, east: number): Box => [-90, 90, west, east]
+
+  /** The longitude `metres` east of ours. */
+  const east = (metres: number) => 1 + metres / METRES / Math.cos((50 * Math.PI) / 180)
+
+  /** Land `metres` wide from 0.3 NM north of us. */
+  const between = (metres: number) => band(50 + 0.3 / 60, 50 + 0.3 / 60 + metres / METRES)
+
+  it('raises nothing for a boat that land stops short of us', () => {
+    const open = setup(passing)
+    open.ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    expect(open.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    const { sink, ev } = setup({ ...passing, land: between(300) })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+  })
+
+  it('reads the courses from where the boats are to where each would be at closest approach', () => {
+    // From 300 m west and 700 m north, heading east at our speed: closest
+    // approach in 100 s, with us 500 m north and it 200 m east of our course.
+    const land = band(0, 0)
+    const { ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: vessel(50 + 700 / METRES, east(-300), 90, 5) }, SELF, NOW)
+    // Each course and those 3° to either side of it.
+    const [theirs, , , ours] = land.calls
+    expect(theirs[0].longitude).toBeCloseTo(east(-300), 5)
+    expect(theirs[1].latitude).toBeCloseTo(50 + 700 / METRES, 5)
+    expect(theirs[1].longitude).toBeCloseTo(east(200), 5)
+    expect(ours[0]).toBe(own.position)
+    expect(ours[1].latitude).toBeCloseTo(50 + 500 / METRES, 5)
+    expect(ours[1].longitude).toBeCloseTo(1, 5)
+  })
+
+  it('counts no land narrower than 150 m', () => {
+    const { sink, ev } = setup({ ...passing, land: between(140) })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('still alarms for a boat that crosses our bow before it reaches land', () => {
+    // From 300 m west and 700 m north, heading east at our speed: it crosses
+    // 400 m ahead of us in 60 s, and reaches land 20 m east of our course
+    // line, before its closest approach 200 m east of it.
+    const crossing = vessel(50 + 700 / METRES, east(-300), 90, 5)
+    const { sink, ev } = setup({ ...passing, land: charts(wall(east(20), east(190))) })
+    ev.evaluate(own, { [OTHER]: crossing }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('never raises a level by ending a passage at land', () => {
+    // Closing at 10 m/s from 3800 m: dead ahead in 380 s, just too late for
+    // the alarm. We reach 160 m of land at 2800 m in 350 s, 300 m apart.
+    const fast = defined(toTrack(vessel(50, 1, 0, 8), NOW, 360))
+    const slow = vessel(50 + 3800 / METRES, 1, 180, 2)
+    const land = band(50 + 2800 / METRES, 50 + 2960 / METRES)
+    const { sink, ev } = setup({ land })
+    ev.evaluate(fast, { [OTHER]: slow }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+  })
+
+  it('lets a boat pass land its course only clips, which it may as well miss', () => {
+    // 300 m of land from 0.3 NM north of us, reaching `half` metres to either
+    // side of our course.
+    const point = (half: number): Box => [
+      50 + 0.3 / 60,
+      50 + 0.3 / 60 + 300 / METRES,
+      east(-half),
+      east(half)
+    ]
+    const clipped = setup({ ...passing, land: charts(point(20)) })
+    clipped.ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    expect(clipped.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    // Wide enough for the courses 3° to either side, if not 6°.
+    for (const half of [40, 200]) {
+      const blocked = setup({ ...passing, land: charts(point(half)) })
+      blocked.ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+      expect(blocked.sink.calls).toHaveLength(0)
+    }
+  })
+
+  it('counts 50 m only of the land that stopped a course, not of other land', () => {
+    const land = between(300)
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    // 55 m of land on our course, 300 m on from where land stopped it: it
+    // does not stop it.
+    land.boxes = band(50 + 860 / METRES, 50 + 915 / METRES).boxes
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    // Nor 100 m on the boat's course, where land never stopped it.
+    land.boxes = band(50 + 1111 / METRES, 50 + 1211 / METRES).boxes
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 4000)
+    expect(sink.calls).toEqual([
+      [OTHER, expect.objectContaining({ level: 'alarm' })],
+      [OTHER, expect.objectContaining({ level: 'alarm' })]
+    ])
+  })
+
+  it('forgets after a minute where land stopped a course', () => {
+    const land = between(300)
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    land.boxes = between(100).boxes
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 61_000)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('drops a bow crossing the boat would come to only past the land', () => {
+    // From 300 m west and 700 m north, heading east: it would cross 400 m
+    // ahead of us in 60 s, but reaches 170 m of land 250 m west of our
+    // course in 10 s.
+    const crossing = vessel(50 + 700 / METRES, east(-300), 90, 5)
+    const open = setup(passing)
+    open.ev.evaluate(own, { [OTHER]: crossing }, SELF, NOW)
+    expect(open.sink.calls).toHaveLength(1)
+    const { sink, ev } = setup({ ...passing, land: charts(wall(east(-250), east(-80))) })
+    ev.evaluate(own, { [OTHER]: crossing }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+  })
+
+  it('ends the passage where the first of the two courses reaches land', () => {
+    // It reaches land in 20 s, 1652 m off; we would in 100 s, 852 m off,
+    // inside the warning distance.
+    const land = charts(
+      [50 + 1592 / METRES, 50 + 1752 / METRES, -180, 180],
+      [50 + 500 / METRES, 50 + 660 / METRES, -180, 180]
+    )
+    const { sink, ev } = setup({ land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+  })
+
+  it('stops a course at 50 m only where land stopped that course, for any course', () => {
+    // The boat's course stopped by 300 m of land 0.4 NM north of its
+    // closest approach, then by 100 m there.
+    const north = (metres: number) => 50 + metres / METRES
+    const land = band(north(1100), north(1400))
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    land.boxes = band(north(1300), north(1400)).boxes
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
+    // Ours stopped 200 m on from where it was, by 55 m.
+    const ours = between(300)
+    const second = setup({ ...passing, land: ours })
+    second.ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    ours.boxes = band(north(756), north(811)).boxes
+    second.ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
+    expect([...sink.calls, ...second.sink.calls]).toHaveLength(0)
+  })
+
+  it('forgets where land stopped a course once it runs clear', () => {
+    // Ours, then the boat's, 0.4 NM north of its closest approach.
+    const north = (metres: number) => 50 + metres / METRES
+    for (const [wide, narrow] of [
+      [between(300), between(100)],
+      [band(north(1100), north(1400)), band(north(1300), north(1400))]
+    ]) {
+      const land = charts(...wide.boxes)
+      const { sink, ev } = setup({ ...passing, land })
+      ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+      land.boxes = []
+      ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
+      land.boxes = narrow.boxes
+      ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 4000)
+      expect(sink.calls.map(([, alert]) => alert?.level)).toEqual(['alarm', 'alarm'])
+    }
+  })
+
+  it('forgets where land stopped the boat once its course runs clear, while ours loads', () => {
+    const north = (metres: number) => 50 + metres / METRES
+    const land = band(north(1100), north(1400))
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    land.boxes = []
+    land.loadingWhen = (from) => from === own.position
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
+    land.boxes = band(north(1300), north(1400)).boxes
+    land.loadingWhen = () => false
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 4000)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('keeps a stop found on one course while the other loads, past the wait', () => {
+    const north = (metres: number) => 50 + metres / METRES
+    const land = band(north(1100), north(1400))
+    land.loadingWhen = (from) => from === own.position
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 12_000)
+    expect(sink.calls).toHaveLength(0)
+  })
+
+  describe('a bow crossing after the closest approach', () => {
+    // A boat abeam to starboard, heading 350.5° at 6.1 m/s, closes to its
+    // closest approach and then crosses ahead of us. `abeam` metres off, it
+    // crosses 160 m ahead in 160 s.
+    const crossingLate = (abeam: number) => {
+      const vx = -abeam / 160
+      const cog = (Math.atan2(vx, 6) * 180) / Math.PI
+      return vessel(50, east(abeam), (cog + 360) % 360, Math.hypot(vx, 6))
+    }
+    const north = (metres: number) => 50 + metres / METRES
+
+    it('looks for land up to the crossing', () => {
+      // Closest 113 m off in 80 s, then across our bow; 200 m of land
+      // between the two, which it reaches in 93 s.
+      const late = crossingLate(160)
+      const open = setup(passing)
+      open.ev.evaluate(own, { [OTHER]: late }, SELF, NOW)
+      expect(open.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+      const land = band(north(560), north(760))
+      const { sink, ev } = setup({ ...passing, land })
+      ev.evaluate(own, { [OTHER]: late }, SELF, NOW)
+      expect(sink.calls).toHaveLength(0)
+    })
+
+    it('keeps the closest approach that comes before the land', () => {
+      // Closest 39 m off in 9 s; land stops it in 42 s, 51 m off.
+      const land = band(north(250), north(450))
+      const { sink, ev } = setup({ ...passing, land })
+      ev.evaluate(own, { [OTHER]: crossingLate(40) }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    })
+  })
+
+  it('raises no level while one course loads, though land stops the other', () => {
+    // It crosses 400 m ahead of us in 60 s; land stops us in 64 s, and its
+    // own course is still loading.
+    const crossing = vessel(50 + 700 / METRES, east(-300), 90, 5)
+    const land = band(50 + 320 / METRES, 50 + 480 / METRES)
+    land.loadingWhen = (from) => from !== own.position
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: crossing }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+    ev.evaluate(own, { [OTHER]: crossing }, SELF, NOW + 10_000)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  describe('far off', () => {
+    // We lie still; the boat comes from 11 km north at 10 m/s, a warning by
+    // the Offshore limits. Land from 4000 m to 4300 m north of us.
+    const still = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    const north = (metres: number) => 50 + metres / METRES
+    const coming = (cogDeg: number) => vessel(north(11000), 1, cogDeg, 10)
+    const offshore = { zones: PRESETS.offshore }
+
+    it('stops each of the three courses where that one was stopped before', () => {
+      // The land's east edge is where the course 3° east of the boat's
+      // leaves it, after 169 m, then after 112 m as the edge seen swings.
+      const island = (edge: number): Box => [north(4000), north(4300), east(-1000), east(edge)]
+      const land = charts(island(360))
+      const { sink, ev } = setup({ ...offshore, land })
+      for (let i = 0; i < 6; i++) {
+        land.boxes = [island(i % 2 === 0 ? 360 : 357)]
+        ev.evaluate(still, { [OTHER]: coming(180) }, SELF, NOW + i * 2000)
+      }
+      expect(sink.calls).toHaveLength(0)
+    })
+
+    it('takes land as the same where a course 6.7 km long swings 3° across it', () => {
+      const land = band(north(4000), north(4300))
+      const { sink, ev } = setup({ ...offshore, land })
+      ev.evaluate(still, { [OTHER]: coming(180) }, SELF, NOW)
+      // 100 m of it now, met 350 m further east.
+      land.boxes = band(north(4200), north(4300)).boxes
+      ev.evaluate(still, { [OTHER]: coming(177) }, SELF, NOW + 2000)
+      expect(sink.calls).toHaveLength(0)
+    })
+  })
+
+  it('raises nothing for a boat we overtake that land stops short of us', () => {
+    // We come up on a boat 100 m ahead at 1 m/s more than its 4 m/s. Without
+    // land it alarms at once; land from 250 m ahead stops it 62 m off.
+    const ahead = vessel(50 + 100 / METRES, 1, 0, 4)
+    const overtaking = { ...passing, slowSpeed: (3 * 1852) / 3600 }
+    const open = setup(overtaking)
+    open.ev.evaluate(own, { [OTHER]: ahead }, SELF, NOW)
+    expect(open.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    const land = band(50 + 250 / METRES, 50 + 410 / METRES)
+    const { sink, ev } = setup({ ...overtaking, land })
+    ev.evaluate(own, { [OTHER]: ahead }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+  })
+
+  it('forgets a stop dated later than now, as after the clock was set back', () => {
+    const land = between(300)
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 10_000)
+    land.boxes = between(100).boxes
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('ranks a boat by when land stops it', () => {
+    // Both would pass 700 m off, a warning. The one to the east would in
+    // 200 s, but land stops it in 167 s; the one to the west passes in 185 s.
+    const eastern = vessel(50 + 2000 / METRES, east(700), 180, 5)
+    const western = vessel(50 + 1850 / METRES, east(-700), 180, 5)
+    const land = charts([50 + 1005 / METRES, 50 + 1165 / METRES, east(500), east(900)])
+    const { sink, ev } = setup({ land, maxAlarms: 1 })
+    ev.evaluate(own, { [OTHER]: eastern, [THIRD]: western }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+  })
+
+  it('raises nothing when our own course reaches land first', () => {
+    const anchored = vessel(50 + 1 / 60, 1, 0, 0)
+    const open = setup(passing)
+    open.ev.evaluate(own, { [OTHER]: anchored }, SELF, NOW)
+    expect(open.sink.calls).toHaveLength(1)
+    const { sink, ev } = setup({ ...passing, land: between(300) })
+    ev.evaluate(own, { [OTHER]: anchored }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+  })
+
+  it('clears an alarm once the passage ends at land', () => {
+    const land = band(0, 0)
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    land.boxes = between(300).boxes
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
+    expect(sink.calls).toEqual([
+      [OTHER, expect.objectContaining({ level: 'alarm' })],
+      [OTHER, undefined]
+    ])
+  })
+
+  it('lets a passage that ended at land run on only past less than 50 m, through gaps', () => {
+    const land = between(300)
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    land.boxes = between(100).boxes
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
+    // Out of range for a moment: no level, nothing judged.
+    ev.evaluate(own, { [OTHER]: vessel(50 + 20 / 60, 1, 180, 5) }, SELF, NOW + 4000)
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 6000)
+    expect(sink.calls).toHaveLength(0)
+    land.boxes = between(40).boxes
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 8000)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('raises no level while the charts load, for up to 10 s', () => {
+    const land = between(300)
+    land.loading = true
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 8000)
+    expect(sink.calls).toHaveLength(0)
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 10_000)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('keeps a passage that ended at land quiet while the charts load, for up to 10 s', () => {
+    const land = between(300)
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    land.loading = true
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 10_000)
+    expect(sink.calls).toHaveLength(0)
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 12_000)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+  })
+
+  it('keeps a raised alarm while the charts load', () => {
+    const land = band(0, 0)
+    const { sink, ev } = setup({ ...passing, land })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    land.loading = true
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW + 2000)
+    expect(sink.calls).toEqual([
+      [OTHER, expect.objectContaining({ level: 'alarm' })],
+      [OTHER, expect.objectContaining({ level: 'alarm' })]
+    ])
+  })
+
+  describe('landStop', () => {
+    // Heading north at 10 m/s for 200 s.
+    const track: Track = { position: { latitude: 50, longitude: 1 }, cog: 0, sog: 10 }
+
+    it('takes the latest time any of the three courses reaches land', () => {
+      // Land from 1000 m north west of our course, from 1100 m east of it.
+      const land = charts(
+        [50 + 1000 / METRES, 50 + 1300 / METRES, east(-200), east(1)],
+        [50 + 1100 / METRES, 50 + 1300 / METRES, east(1), east(200)]
+      )
+      expect(landStop(land, track, 200, undefined)?.time).toBeCloseTo(110.15, 1)
+    })
+
+    it('asks all three courses at once, and none stops it if one runs clear', () => {
+      const land = between(300)
+      land.loading = true
+      expect(landStop(land, track, 200, undefined)).toBeUndefined()
+      expect(land.calls).toHaveLength(3)
+      const partly = charts()
+      let calls = 0
+      const clearFirst = {
+        landRuns: (from: LatLon, to: LatLon) =>
+          calls++ === 0 ? partly.landRuns(from, to) : undefined
+      }
+      expect(landStop(clearFirst, track, 200, undefined)).toBeNull()
+    })
   })
 })
