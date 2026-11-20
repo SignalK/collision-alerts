@@ -36,6 +36,8 @@ const WATER = ['DEPARE', 'DRGARE']
 const ZOOM = 14
 // Metres between the points tested along a course.
 const STEP = 10
+// Points tested on one course at most: a course is read only this far
+// (20 km), as a wider spacing would measure land too short to count.
 const MAX_POINTS = 2000
 // Tiles kept; more while the courses being checked need them.
 const MAX_TILES = 256
@@ -300,7 +302,8 @@ export class ChartLand {
    * charted water on either side, in order, or undefined while the charts
    * for it are still loading. Land at either end, or next to waters no chart
    * covers, does not count: a boat or a closest approach charted on land is
-   * where a chart is wrong or too coarse, not behind land.
+   * where a chart is wrong or too coarse, not behind land. Only the first
+   * 20 km of the course are read.
    */
   landRuns(from: LatLon, to: LatLon, now = Date.now()): LandRun[] | undefined {
     // Without a provider no tile can come, so there is nothing to wait for.
@@ -320,13 +323,14 @@ export class ChartLand {
     const dx = dLon * DEG * Math.cos(lat0) * EARTH_RADIUS
     const dy = (to.latitude - from.latitude) * DEG * EARTH_RADIUS
     const length = Math.hypot(dx, dy)
-    const points = Math.min(MAX_POINTS, Math.ceil(length / STEP))
+    const read = Math.min(length, MAX_POINTS * STEP)
+    const points = Math.ceil(read / STEP)
     if (points < 2) return []
-    const step = length / points
+    const step = read / points
     const memo = new Map<string, Tile>()
     const grounds: Ground[] = []
     for (let i = 0; i <= points; i++) {
-      const f = i / points
+      const f = (i * step) / length
       const point = {
         latitude: from.latitude + f * (to.latitude - from.latitude),
         longitude: wrap(from.longitude + f * dLon)

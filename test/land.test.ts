@@ -177,6 +177,38 @@ describe('ChartLand', () => {
     }
   })
 
+  it('keeps its 10 m spacing on a long course, read for its first 20 km', async () => {
+    // 190 m of land 5 km out, and more 25 km out, on a course of 136 km.
+    const m = (metres: number) => SOUTH + metres / METRES
+    const lands: ChartTiles = {
+      getTile: (_chart, z, _x, y) =>
+        Promise.resolve(
+          stripsTile(z, y, {
+            LNDARE: [
+              [m(5000), m(5190)],
+              [m(25000), m(25500)]
+            ],
+            DEPARE: [
+              [9, m(5000)],
+              [m(5190), m(25000)],
+              [m(25500), 11]
+            ]
+          })
+        )
+    }
+    const { land } = await chartLand({ enc }, lands)
+    const from = at(SOUTH)
+    const to = at(m(136_000))
+    let found = land.landRuns(from, to)
+    for (let i = 0; i < 20 && !found; i++) {
+      await settle()
+      found = land.landRuns(from, to)
+    }
+    expect(found).toHaveLength(1)
+    expect(found?.[0].start).toBeCloseTo(5000, -1)
+    expect(found?.[0].length).toBeGreaterThan(180)
+  })
+
   it('breaks land at waters no chart covers', async () => {
     // Water, 80 m of land, 500 m nothing charted, 80 m of land, water.
     const m = (metres: number) => SOUTH + metres / METRES
