@@ -198,27 +198,41 @@ function metresBetween(a: LatLon, b: LatLon): number {
 
 const LAND_COURSES = [0, -LAND_COURSE_ERROR, LAND_COURSE_ERROR]
 
+// How far past where a course is cut off land may reach (m) and still stop
+// it, when the cut-off point is not own ship's position.
+const LAND_BEYOND = 2000
+
 /**
  * Where land stops a track in the next `seconds`: land at least
  * LAND_BLOCKS long, or LAND_CLEARS where `before` says it stopped that
  * course last, on its course and on the courses LAND_COURSE_ERROR to
  * either side, at the latest of their times. Null when one of them runs
  * clear, undefined while the charts for them load.
+ *
+ * With `beyond`, land that begins within those seconds counts though it
+ * reaches past them, as long as it ends in water within LAND_BEYOND: the
+ * boats cannot meet inside it. Without it, the course must be clear of land
+ * where it is cut off, as when that is own ship's position: a berth charted
+ * as land means the chart is wrong there.
  */
 export function landStop(
   land: LandCheck,
   track: Track,
   seconds: number,
-  before: LatLon[] | undefined
+  before: LatLon[] | undefined,
+  beyond = false
 ): LandStop | null | undefined {
   if (track.sog === 0 || seconds <= 0) return null
+  const cutoff = track.sog * seconds
+  const length = cutoff + (beyond ? LAND_BEYOND : 0)
   // All three are asked at once, so their charts load together.
   const stops = LAND_COURSES.map((turn, i) => {
     const course = { ...track, cog: track.cog + turn }
-    const runs = land.landRuns(track.position, advance(course, seconds))
+    const runs = land.landRuns(track.position, advance(course, length / track.sog))
     if (!runs) return undefined
     const last = before?.[i]
     const run = runs.find((r) => {
+      if (r.start > cutoff) return false
       const same =
         last !== undefined &&
         metresBetween(advance(course, r.start / track.sog), last) <=
@@ -633,8 +647,10 @@ export class Evaluator {
         // A bow crossing after the closest approach still counts, so land
         // is looked for up to whichever comes later.
         const horizon = Math.max(result.tcpa, result.bowCrossing?.time ?? 0)
-        const theirs = landStop(land, targetNow, horizon, state.theirs)
-        const ours = landStop(land, own, horizon, state.ours)
+        // Lying still, we are where the boat's course is cut off.
+        const beyond = own.sog > 0
+        const theirs = landStop(land, targetNow, horizon, state.theirs, beyond)
+        const ours = landStop(land, own, horizon, state.ours, true)
         // Each course keeps where land stopped it until its charts say
         // otherwise.
         if (theirs !== undefined) state.theirs = theirs?.at

@@ -1893,7 +1893,7 @@ describe('a passage that land ends', () => {
     expect(sink.calls).toHaveLength(0)
   })
 
-  it('reads the courses from where the boats are to where each would be at closest approach', () => {
+  it('reads the courses from where the boats are to 2 km past where each would be at closest approach', () => {
     // From 300 m west and 700 m north, heading east at our speed: closest
     // approach in 100 s, with us 500 m north and it 200 m east of our course.
     const land = band(0, 0)
@@ -1903,10 +1903,26 @@ describe('a passage that land ends', () => {
     const [theirs, , , ours] = land.calls
     expect(theirs[0].longitude).toBeCloseTo(east(-300), 5)
     expect(theirs[1].latitude).toBeCloseTo(50 + 700 / METRES, 5)
-    expect(theirs[1].longitude).toBeCloseTo(east(200), 5)
+    expect(theirs[1].longitude).toBeCloseTo(east(2200), 5)
     expect(ours[0]).toBe(own.position)
-    expect(ours[1].latitude).toBeCloseTo(50 + 500 / METRES, 5)
+    expect(ours[1].latitude).toBeCloseTo(50 + 2500 / METRES, 5)
     expect(ours[1].longitude).toBeCloseTo(1, 5)
+  })
+
+  it('raises nothing for two boats that would meet inside an island', () => {
+    // We would meet 926 m north of us, inside 300 m of land.
+    const { sink, ev } = setup({ ...passing, land: band(50 + 800 / METRES, 50 + 1100 / METRES) })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+  })
+
+  it('takes our own position charted on land for a chart that is wrong there', () => {
+    // We lie still in a berth charted as land from 100 m south of us to
+    // 200 m north; a boat comes straight at us from 1 NM, a warning.
+    const still = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    const { sink, ev } = setup({ ...passing, land: band(50 - 100 / METRES, 50 + 200 / METRES) })
+    ev.evaluate(still, { [OTHER]: headOn }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
   })
 
   it('counts no land narrower than 150 m', () => {
