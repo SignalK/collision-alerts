@@ -2176,6 +2176,21 @@ describe('a passage that land ends', () => {
     expect(sink.calls).toHaveLength(0)
   })
 
+  it('raises a boat we overtake no sooner for land that stops it', () => {
+    // We come up on a boat 40 m ahead and 30 m to starboard at 0.1 m/s:
+    // closest 30 m off in 400 s, a warning once it has been inside the
+    // limits for 30 s. Land from 500 m ahead stops it in 94 s, 43 m off,
+    // which alone would raise it at once.
+    const abreast = vessel(50 + 40 / METRES, east(30), 0, 4.9)
+    for (const land of [undefined, band(50 + 500 / METRES, 50 + 700 / METRES)]) {
+      const { sink, ev } = setup({ slowSpeed: (3 * 1852) / 3600, land })
+      ev.evaluate(own, { [OTHER]: abreast }, SELF, NOW)
+      expect(sink.calls).toHaveLength(0)
+      ev.evaluate(own, { [OTHER]: abreast }, SELF, NOW + 30_000)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    }
+  })
+
   it('forgets a stop dated later than now, as after the clock was set back', () => {
     const land = between(300)
     const { sink, ev } = setup({ ...passing, land })

@@ -629,7 +629,6 @@ export class Evaluator {
         return { level, judged }
       }
       const passage = levelOf(result.cpa, tcpa, result.bowCrossing)
-      let judged = passage.judged
       let level = passage.level
       // When the closest approach comes, as far as the boats can get to it.
       let reachedTcpa = tcpa
@@ -673,7 +672,6 @@ export class Evaluator {
           if (severity(beforeLand.level) < severity(level)) {
             level = beforeLand.level
           }
-          judged = beforeLand.judged
           reachedTcpa = Math.min(tcpa, end)
         }
         // While a course loads, its land may stop the boat sooner: the level
@@ -698,12 +696,14 @@ export class Evaluator {
         const step = before ? Math.max(0, Math.min(nowMs - before.at, sinceLastEvaluation)) : 0
         const net = Math.max(0, (before?.net ?? 0) + (level ? step : -step / 3))
         overtakenInZone.set(targetId, { net, at: nowMs })
+        // Raised at once by its whole passage only: ended at land, a passage
+        // can come close sooner, and land must never raise a boat earlier.
         if (
           net < OVERTAKEN_RAISE_DELAY &&
           assessPassage(
             this.overtakenAtOnceZones,
             this.options.slowPassingDistance,
-            judged,
+            passage.judged,
             undefined
           ) === undefined
         ) {
