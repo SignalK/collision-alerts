@@ -1867,6 +1867,13 @@ describe('a passage that land ends', () => {
           }
         }
         return runs.sort((x, y) => x.start - y.start)
+      },
+      onLand(at: LatLon) {
+        if (check.loading || check.loadingWhen(at)) return undefined
+        return check.boxes.some(
+          ([south, north, west, east]) =>
+            at.latitude > south && at.latitude < north && at.longitude > west && at.longitude < east
+        )
       }
     }
     return check
@@ -1923,6 +1930,20 @@ describe('a passage that land ends', () => {
     const { sink, ev } = setup({ ...passing, land: band(50 - 100 / METRES, 50 + 200 / METRES) })
     ev.evaluate(still, { [OTHER]: headOn }, SELF, NOW)
     expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+  })
+
+  it('counts no land past where the boats would meet while either is charted on land', () => {
+    // The boat comes straight at us from 1 NM; we would meet 926 m north of
+    // us. Land from 100 m south of us to 1600 m north, though we are under
+    // way, then land from 300 m north to 2000 m north, under the boat.
+    for (const land of [
+      band(50 - 100 / METRES, 50 + 1600 / METRES),
+      band(50 + 300 / METRES, 50 + 2000 / METRES)
+    ]) {
+      const { sink, ev } = setup({ ...passing, land })
+      ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    }
   })
 
   it('counts no land narrower than 150 m', () => {
@@ -2305,7 +2326,8 @@ describe('a passage that land ends', () => {
       let calls = 0
       const clearFirst = {
         landRuns: (from: LatLon, to: LatLon) =>
-          calls++ === 0 ? partly.landRuns(from, to) : undefined
+          calls++ === 0 ? partly.landRuns(from, to) : undefined,
+        onLand: () => false
       }
       expect(landStop(clearFirst, track, 200, undefined)).toBeNull()
     })

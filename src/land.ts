@@ -317,6 +317,21 @@ export class ChartLand {
     }
   }
 
+  /**
+   * Whether the charts show land at a point, as `landRuns` counts it, or
+   * undefined while its tiles are still loading.
+   */
+  onLand(at: LatLon, now = Date.now()): boolean | undefined {
+    if (this.providers.size === 0) return false
+    try {
+      const ground = this.groundAt(at, now, new Map())
+      return ground === 'loading' ? undefined : ground === 'land'
+    } catch (err) {
+      this.report('', err instanceof Error ? err.message : String(err))
+      return undefined
+    }
+  }
+
   private scan(from: LatLon, to: LatLon, now: number): LandRun[] | undefined {
     const lat0 = from.latitude * DEG
     const dLon = wrap(to.longitude - from.longitude)

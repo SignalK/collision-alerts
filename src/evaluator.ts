@@ -45,6 +45,8 @@ export interface LandCheck {
    * length, metres. Undefined while the charts for it are still loading.
    */
   landRuns(from: LatLon, to: LatLon): { start: number; length: number }[] | undefined
+  /** Whether the charts show land at a point; undefined while they load. */
+  onLand(at: LatLon): boolean | undefined
 }
 
 export interface EvaluatorOptions {
@@ -646,10 +648,16 @@ export class Evaluator {
         // A bow crossing after the closest approach still counts, so land
         // is looked for up to whichever comes later.
         const horizon = Math.max(result.tcpa, result.bowCrossing?.time ?? 0)
-        // Lying still, we are where the boat's course is cut off.
-        const beyond = own.sog > 0
+        // Land counts though it reaches past where the boats would meet, but
+        // not while we lie still, where the boat's course is cut off at our
+        // position, nor while either boat is charted on land: the chart is
+        // wrong there, and that land may reach past them both.
+        const beyond =
+          own.sog > 0 &&
+          land.onLand(own.position) === false &&
+          land.onLand(targetNow.position) === false
         const theirs = landStop(land, targetNow, horizon, state.theirs, beyond)
-        const ours = landStop(land, own, horizon, state.ours, true)
+        const ours = landStop(land, own, horizon, state.ours, beyond)
         // Each course keeps where land stopped it until its charts say
         // otherwise.
         if (theirs !== undefined) state.theirs = theirs?.at
