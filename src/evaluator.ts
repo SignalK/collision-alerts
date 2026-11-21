@@ -45,6 +45,8 @@ export interface LandCheck {
    * length, metres. Undefined while the charts for it are still loading.
    */
   landRuns(from: LatLon, to: LatLon): { start: number; length: number }[] | undefined
+  /** Whether the charts show land at a point; undefined while they load. */
+  onLand(at: LatLon): boolean | undefined
 }
 
 export interface EvaluatorOptions {
@@ -69,7 +71,7 @@ export interface EvaluatorOptions {
   maxRange: number
   /** Data older than this (seconds) is ignored. */
   maxAge: number
-  /** Charts to tell a course to closest approach that runs across land. */
+  /** Charts to tell where land stops a course. */
   land?: LandCheck
 }
 
@@ -198,27 +200,39 @@ function metresBetween(a: LatLon, b: LatLon): number {
 
 const LAND_COURSES = [0, -LAND_COURSE_ERROR, LAND_COURSE_ERROR]
 
+// How far past where a course is cut off land may reach (m) and still stop
+// it, when the cut-off point is not own ship's position.
+const LAND_BEYOND = 2000
+
 /**
  * Where land stops a track in the next `seconds`: land at least
  * LAND_BLOCKS long, or LAND_CLEARS where `before` says it stopped that
  * course last, on its course and on the courses LAND_COURSE_ERROR to
  * either side, at the latest of their times. Null when one of them runs
  * clear, undefined while the charts for them load.
+ *
+ * With `beyond`, land that begins within those seconds counts though it
+ * reaches past them, as long as it ends in water within LAND_BEYOND: the
+ * boats cannot meet inside it. Without it, land must end within them.
  */
 export function landStop(
   land: LandCheck,
   track: Track,
   seconds: number,
-  before: LatLon[] | undefined
+  before: LatLon[] | undefined,
+  beyond = false
 ): LandStop | null | undefined {
   if (track.sog === 0 || seconds <= 0) return null
+  const cutoff = track.sog * seconds
+  const length = cutoff + (beyond ? LAND_BEYOND : 0)
   // All three are asked at once, so their charts load together.
   const stops = LAND_COURSES.map((turn, i) => {
     const course = { ...track, cog: track.cog + turn }
-    const runs = land.landRuns(track.position, advance(course, seconds))
+    const runs = land.landRuns(track.position, advance(course, length / track.sog))
     if (!runs) return undefined
     const last = before?.[i]
     const run = runs.find((r) => {
+      if (r.start > cutoff) return false
       const same =
         last !== undefined &&
         metresBetween(advance(course, r.start / track.sog), last) <=
@@ -615,7 +629,6 @@ export class Evaluator {
         return { level, judged }
       }
       const passage = levelOf(result.cpa, tcpa, result.bowCrossing)
-      let judged = passage.judged
       let level = passage.level
       // When the closest approach comes, as far as the boats can get to it.
       let reachedTcpa = tcpa
@@ -633,8 +646,13 @@ export class Evaluator {
         // A bow crossing after the closest approach still counts, so land
         // is looked for up to whichever comes later.
         const horizon = Math.max(result.tcpa, result.bowCrossing?.time ?? 0)
-        const theirs = landStop(land, targetNow, horizon, state.theirs)
-        const ours = landStop(land, own, horizon, state.ours)
+        // Land counts though it reaches past where the boats would meet, but
+        // not while either boat is charted on land: the chart is wrong there,
+        // and that land may reach past them both.
+        const beyond =
+          land.onLand(own.position) === false && land.onLand(targetNow.position) === false
+        const theirs = landStop(land, targetNow, horizon, state.theirs, beyond)
+        const ours = landStop(land, own, horizon, state.ours, beyond)
         // Each course keeps where land stopped it until its charts say
         // otherwise.
         if (theirs !== undefined) state.theirs = theirs?.at
@@ -657,7 +675,6 @@ export class Evaluator {
           if (severity(beforeLand.level) < severity(level)) {
             level = beforeLand.level
           }
-          judged = beforeLand.judged
           reachedTcpa = Math.min(tcpa, end)
         }
         // While a course loads, its land may stop the boat sooner: the level
@@ -682,12 +699,14 @@ export class Evaluator {
         const step = before ? Math.max(0, Math.min(nowMs - before.at, sinceLastEvaluation)) : 0
         const net = Math.max(0, (before?.net ?? 0) + (level ? step : -step / 3))
         overtakenInZone.set(targetId, { net, at: nowMs })
+        // Raised at once by its whole passage only: ended at land, a passage
+        // can come close sooner, and land must never raise a boat earlier.
         if (
           net < OVERTAKEN_RAISE_DELAY &&
           assessPassage(
             this.overtakenAtOnceZones,
             this.options.slowPassingDistance,
-            judged,
+            passage.judged,
             undefined
           ) === undefined
         ) {

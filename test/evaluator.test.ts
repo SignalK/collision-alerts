@@ -1867,6 +1867,13 @@ describe('a passage that land ends', () => {
           }
         }
         return runs.sort((x, y) => x.start - y.start)
+      },
+      onLand(at: LatLon) {
+        if (check.loading || check.loadingWhen(at)) return undefined
+        return check.boxes.some(
+          ([south, north, west, east]) =>
+            at.latitude > south && at.latitude < north && at.longitude > west && at.longitude < east
+        )
       }
     }
     return check
@@ -1893,7 +1900,7 @@ describe('a passage that land ends', () => {
     expect(sink.calls).toHaveLength(0)
   })
 
-  it('reads the courses from where the boats are to where each would be at closest approach', () => {
+  it('reads the courses from where the boats are to 2 km past where each would be at closest approach', () => {
     // From 300 m west and 700 m north, heading east at our speed: closest
     // approach in 100 s, with us 500 m north and it 200 m east of our course.
     const land = band(0, 0)
@@ -1903,10 +1910,58 @@ describe('a passage that land ends', () => {
     const [theirs, , , ours] = land.calls
     expect(theirs[0].longitude).toBeCloseTo(east(-300), 5)
     expect(theirs[1].latitude).toBeCloseTo(50 + 700 / METRES, 5)
-    expect(theirs[1].longitude).toBeCloseTo(east(200), 5)
+    expect(theirs[1].longitude).toBeCloseTo(east(2200), 5)
     expect(ours[0]).toBe(own.position)
-    expect(ours[1].latitude).toBeCloseTo(50 + 500 / METRES, 5)
+    expect(ours[1].latitude).toBeCloseTo(50 + 2500 / METRES, 5)
     expect(ours[1].longitude).toBeCloseTo(1, 5)
+  })
+
+  it('raises nothing for two boats that would meet inside an island', () => {
+    // We would meet 926 m north of us, inside 300 m of land.
+    const { sink, ev } = setup({ ...passing, land: band(50 + 800 / METRES, 50 + 1100 / METRES) })
+    ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+    expect(sink.calls).toHaveLength(0)
+  })
+
+  it('takes our own position charted on land for a chart that is wrong there', () => {
+    // We lie still in a berth charted as land from 100 m south of us to
+    // 200 m north; a boat comes straight at us from 1 NM, a warning.
+    const still = defined(toTrack(vessel(50, 1, 0, 0), NOW, 360))
+    const { sink, ev } = setup({ ...passing, land: band(50 - 100 / METRES, 50 + 200 / METRES) })
+    ev.evaluate(still, { [OTHER]: headOn }, SELF, NOW)
+    expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+  })
+
+  it('counts no land past where the boats would meet while either is charted on land', () => {
+    // The boat comes straight at us from 1 NM; we would meet 926 m north of
+    // us. Land from 100 m south of us to 1600 m north, though we are under
+    // way, then land from 300 m north to 2000 m north, under the boat.
+    for (const land of [
+      band(50 - 100 / METRES, 50 + 1600 / METRES),
+      band(50 + 300 / METRES, 50 + 2000 / METRES)
+    ]) {
+      const { sink, ev } = setup({ ...passing, land })
+      ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    }
+  })
+
+  it('stops a boat at land past its closest approach, however slowly we move', () => {
+    // From 500 m south, on a track 45 m west of ours, at 5 m/s: closest
+    // abeam of us, inside an islet from 200 m south of us to 600 m north and
+    // from 600 m to 15 m west. We lie still or creep north at 0.6 kn.
+    const islet = charts([50 - 200 / METRES, 50 + 600 / METRES, east(-600), east(-15)])
+    const coming = vessel(50 - 500 / METRES, east(-45), 0, 5)
+    const creeping = (i: number) =>
+      defined(toTrack(vessel(50, 1, 0, i % 2 === 0 ? 0.2 : 0.3), NOW, 360))
+    const open = setup(passing)
+    open.ev.evaluate(creeping(0), { [OTHER]: coming }, SELF, NOW)
+    expect(open.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    const { sink, ev } = setup({ ...passing, land: islet })
+    for (let i = 0; i < 4; i++) {
+      ev.evaluate(creeping(i), { [OTHER]: coming }, SELF, NOW + i * 2000)
+    }
+    expect(sink.calls).toHaveLength(0)
   })
 
   it('counts no land narrower than 150 m', () => {
@@ -2160,6 +2215,21 @@ describe('a passage that land ends', () => {
     expect(sink.calls).toHaveLength(0)
   })
 
+  it('raises a boat we overtake no sooner for land that stops it', () => {
+    // We come up on a boat 40 m ahead and 30 m to starboard at 0.1 m/s:
+    // closest 30 m off in 400 s, a warning once it has been inside the
+    // limits for 30 s. Land from 500 m ahead stops it in 94 s, 43 m off,
+    // which alone would raise it at once.
+    const abreast = vessel(50 + 40 / METRES, east(30), 0, 4.9)
+    for (const land of [undefined, band(50 + 500 / METRES, 50 + 700 / METRES)]) {
+      const { sink, ev } = setup({ slowSpeed: (3 * 1852) / 3600, land })
+      ev.evaluate(own, { [OTHER]: abreast }, SELF, NOW)
+      expect(sink.calls).toHaveLength(0)
+      ev.evaluate(own, { [OTHER]: abreast }, SELF, NOW + 30_000)
+      expect(sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'warn' })]])
+    }
+  })
+
   it('forgets a stop dated later than now, as after the clock was set back', () => {
     const land = between(300)
     const { sink, ev } = setup({ ...passing, land })
@@ -2265,6 +2335,13 @@ describe('a passage that land ends', () => {
       expect(landStop(land, track, 200, undefined)?.time).toBeCloseTo(110.15, 1)
     })
 
+    it('takes land reaching past where the course is cut off only if it begins before', () => {
+      const from = (metres: number) => band(50 + metres / METRES, 50 + (metres + 300) / METRES)
+      expect(landStop(from(2100), track, 200, undefined, true)).toBeNull()
+      expect(landStop(from(1900), track, 200, undefined, true)?.time).toBeCloseTo(190.26, 1)
+      expect(landStop(from(1900), track, 200, undefined)).toBeNull()
+    })
+
     it('asks all three courses at once, and none stops it if one runs clear', () => {
       const land = between(300)
       land.loading = true
@@ -2274,7 +2351,8 @@ describe('a passage that land ends', () => {
       let calls = 0
       const clearFirst = {
         landRuns: (from: LatLon, to: LatLon) =>
-          calls++ === 0 ? partly.landRuns(from, to) : undefined
+          calls++ === 0 ? partly.landRuns(from, to) : undefined,
+        onLand: () => false
       }
       expect(landStop(clearFirst, track, 200, undefined)).toBeNull()
     })

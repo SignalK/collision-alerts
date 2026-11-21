@@ -147,6 +147,16 @@ describe('ChartLand', () => {
     expectBand(await runs(land, at(9.995), at(10.009)))
   })
 
+  it('tells whether a point is on land once its tile has loaded', async () => {
+    const { land } = await chartLand({ enc }, band())
+    expect(land.onLand(at(10.002))).toBeUndefined()
+    await settle()
+    expect(land.onLand(at(10.002))).toBe(true)
+    expect(land.onLand(at(10.0045))).toBe(false)
+    // No chart covers it.
+    expect(land.onLand(at(10.002, 22))).toBe(false)
+  })
+
   it('counts no land at either end of a course', async () => {
     const { land } = await chartLand({ enc }, band())
     expect(await runs(land, at(10.002), at(10.009))).toEqual([])
