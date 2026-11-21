@@ -301,9 +301,9 @@ export class ChartLand {
    * The stretches of land a straight course from `from` to `to` crosses with
    * charted water on either side, in order, or undefined while the charts
    * for it are still loading. Land at either end, or next to waters no chart
-   * covers, does not count: a boat or a closest approach charted on land is
-   * where a chart is wrong or too coarse, not behind land. Only the first
-   * 20 km of the course are read.
+   * covers, does not count: a boat charted on land is where a chart is wrong
+   * or too coarse, not behind land, and land reaching past the end may not
+   * end in water. Only the first 20 km of the course are read.
    */
   landRuns(from: LatLon, to: LatLon, now = Date.now()): LandRun[] | undefined {
     // Without a provider no tile can come, so there is nothing to wait for.

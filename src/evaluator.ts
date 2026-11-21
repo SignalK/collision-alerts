@@ -71,7 +71,7 @@ export interface EvaluatorOptions {
   maxRange: number
   /** Data older than this (seconds) is ignored. */
   maxAge: number
-  /** Charts to tell a course to closest approach that runs across land. */
+  /** Charts to tell where land stops a course. */
   land?: LandCheck
 }
 
@@ -213,9 +213,7 @@ const LAND_BEYOND = 2000
  *
  * With `beyond`, land that begins within those seconds counts though it
  * reaches past them, as long as it ends in water within LAND_BEYOND: the
- * boats cannot meet inside it. Without it, the course must be clear of land
- * where it is cut off, as when that is own ship's position: a berth charted
- * as land means the chart is wrong there.
+ * boats cannot meet inside it. Without it, land must end within them.
  */
 export function landStop(
   land: LandCheck,
@@ -649,13 +647,10 @@ export class Evaluator {
         // is looked for up to whichever comes later.
         const horizon = Math.max(result.tcpa, result.bowCrossing?.time ?? 0)
         // Land counts though it reaches past where the boats would meet, but
-        // not while we lie still, where the boat's course is cut off at our
-        // position, nor while either boat is charted on land: the chart is
-        // wrong there, and that land may reach past them both.
+        // not while either boat is charted on land: the chart is wrong there,
+        // and that land may reach past them both.
         const beyond =
-          own.sog > 0 &&
-          land.onLand(own.position) === false &&
-          land.onLand(targetNow.position) === false
+          land.onLand(own.position) === false && land.onLand(targetNow.position) === false
         const theirs = landStop(land, targetNow, horizon, state.theirs, beyond)
         const ours = landStop(land, own, horizon, state.ours, beyond)
         // Each course keeps where land stopped it until its charts say

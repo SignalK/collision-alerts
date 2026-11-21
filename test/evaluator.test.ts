@@ -1946,6 +1946,24 @@ describe('a passage that land ends', () => {
     }
   })
 
+  it('stops a boat at land past its closest approach, however slowly we move', () => {
+    // From 500 m south, on a track 45 m west of ours, at 5 m/s: closest
+    // abeam of us, inside an islet from 200 m south of us to 600 m north and
+    // from 600 m to 15 m west. We lie still or creep north at 0.6 kn.
+    const islet = charts([50 - 200 / METRES, 50 + 600 / METRES, east(-600), east(-15)])
+    const coming = vessel(50 - 500 / METRES, east(-45), 0, 5)
+    const creeping = (i: number) =>
+      defined(toTrack(vessel(50, 1, 0, i % 2 === 0 ? 0.2 : 0.3), NOW, 360))
+    const open = setup(passing)
+    open.ev.evaluate(creeping(0), { [OTHER]: coming }, SELF, NOW)
+    expect(open.sink.calls).toEqual([[OTHER, expect.objectContaining({ level: 'alarm' })]])
+    const { sink, ev } = setup({ ...passing, land: islet })
+    for (let i = 0; i < 4; i++) {
+      ev.evaluate(creeping(i), { [OTHER]: coming }, SELF, NOW + i * 2000)
+    }
+    expect(sink.calls).toHaveLength(0)
+  })
+
   it('counts no land narrower than 150 m', () => {
     const { sink, ev } = setup({ ...passing, land: between(140) })
     ev.evaluate(own, { [OTHER]: headOn }, SELF, NOW)
@@ -2315,6 +2333,13 @@ describe('a passage that land ends', () => {
         [50 + 1100 / METRES, 50 + 1300 / METRES, east(1), east(200)]
       )
       expect(landStop(land, track, 200, undefined)?.time).toBeCloseTo(110.15, 1)
+    })
+
+    it('takes land reaching past where the course is cut off only if it begins before', () => {
+      const from = (metres: number) => band(50 + metres / METRES, 50 + (metres + 300) / METRES)
+      expect(landStop(from(2100), track, 200, undefined, true)).toBeNull()
+      expect(landStop(from(1900), track, 200, undefined, true)?.time).toBeCloseTo(190.26, 1)
+      expect(landStop(from(1900), track, 200, undefined)).toBeNull()
     })
 
     it('asks all three courses at once, and none stops it if one runs clear', () => {
